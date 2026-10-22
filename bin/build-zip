@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Build the install ZIP of one plugin. See usage() below.
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: bin/build-zip <plugin path> [<out dir>]
+
+Builds <out dir>/<component>-<release>.zip for the plugin in <plugin path> and
+prints the path of the ZIP. The out dir defaults to dist/ in the repo root.
+
+The component and the release come from the plugin's version.php. The folder must
+be named after the plugin (academictranscript for local_academictranscript). The
+ZIP holds only that folder, which is the layout Moodle's plugin installer expects.
+It leaves out .DS_Store, *.swp and .git* files.
+EOF
+}
+
+die() {
+  printf 'build-zip: %s\n' "$*" >&2
+  exit 1
+}
+
+# plugin_prop <version.php> <name>: print the quoted value that $plugin-><name> is
+# set to in a version.php file (nothing when it is not set).
+plugin_prop() {
+  local line quotes="'\"" re
+  re="^[[:space:]]*[\$]plugin->$2[[:space:]]*=[[:space:]]*[$quotes]([^$quotes]*)[$quotes]"
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [[ $line =~ $re ]]; then
+      printf '%s\n' "${BASH_REMATCH[1]}"
+      return 0
+    fi
+  done <"$1"
+}
+
+case ${1:-} in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  -*)
+    usage >&2
+    exit 2
+    ;;
+esac
+if [ $# -lt 1 ] || [ $# -gt 2 ]; then
+  usage >&2
+  exit 2
+fi
+
+repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+command -v zip >/dev/null 2>&1 || die "the zip command is not installed"
+
+[ -d "$1" ] || die "$1 is not a folder"
+plugin=$(cd "$1" && pwd)
+[ -f "$plugin/version.php" ] || die "$1 has no version.php, so it is not a plugin folder"
+
+component=$(plugin_prop "$plugin/version.php" component)
+release=$(plugin_prop "$plugin/version.php" release)
+[ -n "$component" ] || die "$1/version.php does not set \$plugin->component"
+[ -n "$release" ] || die "$1/version.php does not set \$plugin->release"
+
+# Moodle's frankenstyle name: <type>_<name>.
+[[ $component =~ ^[a-z][a-z0-9]*_[a-z][a-z0-9_]*$ ]] ||
+  die "the component \"$component\" in $1/version.php is not a Moodle plugin name like local_example"
+# The release goes into a file name, so keep it to characters that are safe there.
+[[ $release =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*$ ]] ||
+  die "the release \"$release\" in $1/version.php can only hold letters, digits and . _ + -"
+
+name=${component#*_}
+folder=$(basename "$plugin")
+[ "$folder" = "$name" ] ||
+  die "the folder is named \"$folder\", but the component $component needs a folder named \"$name\""
+
+out=${2:-$repo/dist}
+mkdir -p "$out"
+out=$(cd "$out" && pwd)
+zipname=$component-$release.zip
+
+# Build in a temp dir, then move the finished file into place: zip would add to an
+# existing ZIP instead of replacing it, and a failed build must not leave half a file.
+work=$(mktemp -d "${TMPDIR:-/tmp}/build-zip.XXXXXX")
+trap 'rm -rf "$work"' EXIT
+
+(
+  cd "$(dirname "$plugin")"
+  find "$folder" \( -name .DS_Store -o -name '*.swp' -o -name '.git*' \) -prune -o ! -type d -print |
+    LC_ALL=C sort |
+    zip -q -X "$work/$zipname" -@
+)
+
+mv -f "$work/$zipname" "$out/$zipname"
+printf '%s\n' "$out/$zipname"

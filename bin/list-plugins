@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# List the plugin folders of this repo. See usage() below.
+set -euo pipefail
+
+# Byte order for sorting and plain ASCII character ranges, whatever the user's locale.
+export LC_ALL=C
+
+usage() {
+  cat <<'EOF'
+Usage: bin/list-plugins [--json]
+
+Lists the plugin folders of this repo, relative to the repo root, sorted, one per
+line (or as a JSON array on one line with --json).
+
+A plugin folder holds a version.php that sets $plugin->component. Folders inside
+another plugin folder, dist/, tests/ or .git/ are skipped.
+EOF
+}
+
+json=0
+case $# in
+  0) ;;
+  1)
+    case $1 in
+      --json) json=1 ;;
+      -h | --help)
+        usage
+        exit 0
+        ;;
+      *)
+        usage >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
+
+repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo"
+
+# Every folder with a version.php that sets $plugin->component, one per line and
+# each ending in a slash, so that a plugin sorts right before the folders in it.
+dirs=''
+while IFS= read -r file; do
+  if grep -Eq '^[[:space:]]*[$]plugin->component[[:space:]]*=' "$file"; then
+    dir=${file%version.php}
+    dir=${dir#./}
+    if [ -z "$dir" ]; then
+      continue
+    fi
+    case $dir in
+      *[!A-Za-z0-9_./-]*)
+        printf 'list-plugins: the plugin folder "%s" has characters other than letters, digits and _ . / -\n' \
+          "${dir%/}" >&2
+        exit 1
+        ;;
+    esac
+    dirs="$dirs$dir
+"
+  fi
+done < <(find . -type d \( -name .git -o -name dist -o -name tests \) -prune -o -type f -name version.php -print)
+
+# Sorted, a folder is followed by everything inside it, so one pass drops the
+# nested ones. Then back to names without the slash, sorted.
+plugins=$(printf '%s' "$dirs" |
+  sort |
+  awk 'last != "" && index($0, last) == 1 { next } { print; last = $0 }' |
+  sed 's|/$||' |
+  sort)
+
+if [ "$json" -eq 1 ]; then
+  items=''
+  while IFS= read -r dir; do
+    if [ -n "$dir" ]; then
+      items="$items${items:+,}\"$dir\""
+    fi
+  done <<<"$plugins"
+  printf '[%s]\n' "$items"
+elif [ -n "$plugins" ]; then
+  printf '%s\n' "$plugins"
+fi

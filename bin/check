@@ -1,0 +1,364 @@
+#!/usr/bin/env bash
+# Run the CI checks of this repo locally, in Docker, except the PHP Mess Detector
+# and Behat. See usage() below.
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: bin/check [--moodle 4.5|5.1|5.2|5.3] [--php 8.1|8.2|8.3|8.4]
+                 [--db pgsql|mysqli|mariadb] [--plugin <path>]... [<step>...]
+
+Runs the CI checks of this repo on its plugins in Docker, except the PHP Mess
+Detector and Behat, so Docker is all you need to install. For each plugin it
+starts a database container and a container with PHP and moodle-plugin-ci,
+installs the plugin into a fresh Moodle, runs the steps and removes both
+containers. It prints PASS <step> or FAIL <step> for each step (the output of the
+tools goes to stderr) and exits 1 if any step failed.
+
+Options:
+  --moodle <release>  Moodle release: 4.5, 5.1, 5.2 or 5.3 (default 5.3)
+  --php <version>     PHP version: 8.1, 8.2, 8.3 or 8.4 (default 8.3)
+  --db <database>     pgsql (PostgreSQL 17), mysqli (MySQL 8.4) or mariadb
+                      (MariaDB 11) (default pgsql)
+  --plugin <path>     Plugin folder to check, from the current folder or from the
+                      repo root. Repeat it for several. Default: every plugin.
+
+Steps (default: all of them, in this order):
+  phplint phpcs phpdoc validate savepoints mustache grunt phpunit
+They run as in CI: phpcs and phpdoc with --max-warnings 0, grunt with
+--max-lint-warnings 0 and phpunit with --fail-on-warning.
+
+The first run for a PHP version builds the image moodle-plugins-ci:<php>, which
+takes a few minutes. Remove that image (docker rmi) to get a newer
+moodle-plugin-ci the next time. Every run clones Moodle again, which takes a few
+minutes too.
+
+Environment:
+  CHECK_REGISTRY  Prefix for the database images, for example
+                  mirror.gcr.io/library when Docker Hub limits your pulls.
+
+Exit status: 0 when every step passed, 1 when a step failed, 2 when the checks
+could not run (bad options, no Docker, a container that would not start).
+EOF
+}
+
+# The Dockerfile of the runner image: PHP with Moodle's extensions from moodlehq's
+# image, plus what moodle-plugin-ci needs. Node comes first, through nvm, because
+# the install script of moodle-plugin-ci runs npm. The database clients are there
+# because moodle-plugin-ci creates the database with psql or mysql.
+runner_dockerfile() {
+  cat <<'DOCKERFILE'
+ARG PHP_VERSION=8.3
+FROM moodlehq/moodle-php-apache:${PHP_VERSION}
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git unzip locales curl ca-certificates poppler-utils postgresql-client default-mysql-client \
+ && sed -i 's/^# *en_AU.UTF-8 UTF-8/en_AU.UTF-8 UTF-8/; s/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \
+ && locale-gen \
+ && rm -rf /var/lib/apt/lists/*
+# Node through nvm (moodle-plugin-ci switches to Moodle's .nvmrc version with it).
+ENV NVM_DIR=/opt/nvm
+RUN mkdir -p $NVM_DIR && curl -sSo- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | PROFILE=/dev/null bash \
+ && . $NVM_DIR/nvm.sh && nvm install 22 && nvm alias default 22 \
+ && ln -s $NVM_DIR/versions/node/$(nvm version default)/bin/node /usr/local/bin/node \
+ && ln -s $NVM_DIR/versions/node/$(nvm version default)/bin/npm /usr/local/bin/npm \
+ && ln -s $NVM_DIR/versions/node/$(nvm version default)/bin/npx /usr/local/bin/npx
+RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+RUN composer create-project -n --no-dev --prefer-dist moodlehq/moodle-plugin-ci /opt/ci ^4
+ENV PATH=/opt/ci/bin:/opt/ci/vendor/bin:$PATH
+RUN echo 'max_input_vars=5000' > /usr/local/etc/php/conf.d/zz-mpci.ini
+WORKDIR /work
+DOCKERFILE
+}
+
+repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+# Can't run the checks: wrong options, no Docker, a container that will not start.
+die() {
+  printf 'check: %s\n' "$*" >&2
+  exit 2
+}
+
+usage_error() {
+  printf 'check: %s\n\n' "$*" >&2
+  usage >&2
+  exit 2
+}
+
+# A progress line. The tools' own output also goes to stderr, so stdout holds only
+# the report.
+note() {
+  printf '==> %s\n' "$*" >&2
+}
+
+# The process interruptible() is running, so that the clean-up can stop it.
+job_pid=''
+
+# Run a command in the background and wait for it. A signal sent to this script
+# then runs the traps at once; bash would otherwise wait for a foreground command
+# to finish first, which can take minutes. The command keeps this script's standard
+# input (bash would give a background command /dev/null) and has to be a simple
+# command, so that job_pid is the command itself.
+interruptible() {
+  local status=0
+  "$@" <&0 &
+  job_pid=$!
+  wait "$job_pid" || status=$?
+  job_pid=''
+  return "$status"
+}
+
+# --- Options --------------------------------------------------------------------
+
+moodle=5.3
+php=8.3
+db=pgsql
+plugin_args=()
+steps=()
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --moodle | --php | --db | --plugin)
+      [ $# -ge 2 ] || usage_error "$1 needs a value"
+      option=$1
+      value=$2
+      shift 2
+      ;;
+    --moodle=* | --php=* | --db=* | --plugin=*)
+      option=${1%%=*}
+      value=${1#*=}
+      shift
+      ;;
+    -*) usage_error "unknown option: $1" ;;
+    *)
+      steps+=("$1")
+      shift
+      continue
+      ;;
+  esac
+  case $option in
+    --moodle) moodle=$value ;;
+    --php) php=$value ;;
+    --db) db=$value ;;
+    --plugin) plugin_args+=("$value") ;;
+  esac
+done
+
+case $moodle in
+  4.5) branch=MOODLE_405_STABLE ;;
+  5.1) branch=MOODLE_501_STABLE ;;
+  5.2) branch=MOODLE_502_STABLE ;;
+  5.3) branch=MOODLE_503_STABLE ;;
+  *) usage_error "--moodle must be 4.5, 5.1, 5.2 or 5.3, not \"$moodle\"" ;;
+esac
+
+case $php in
+  8.1 | 8.2 | 8.3 | 8.4) ;;
+  *) usage_error "--php must be 8.1, 8.2, 8.3 or 8.4, not \"$php\"" ;;
+esac
+
+# What each database needs: its image, the root user, the container options, a
+# health check (the same ones the CI workflow uses) and server arguments. The data
+# lives in memory, so a run leaves nothing on disk. Passwords are empty, as in CI.
+db_pass=''
+case $db in
+  pgsql)
+    db_image=postgres:17
+    db_user=postgres
+    db_options=(-e POSTGRES_HOST_AUTH_METHOD=trust --tmpfs /var/lib/postgresql/data)
+    db_health='pg_isready -h 127.0.0.1 -U postgres'
+    db_server_args=()
+    ;;
+  mysqli)
+    db_image=mysql:8.4
+    db_user=root
+    db_options=(-e MYSQL_ALLOW_EMPTY_PASSWORD=yes --tmpfs /var/lib/mysql)
+    db_health='mysqladmin ping -h 127.0.0.1'
+    db_server_args=(--character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci)
+    ;;
+  mariadb)
+    db_image=mariadb:11
+    db_user=root
+    db_options=(-e MARIADB_ALLOW_EMPTY_ROOT_PASSWORD=1 --tmpfs /var/lib/mysql)
+    db_health='healthcheck.sh --connect --innodb_initialized'
+    db_server_args=(--character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci)
+    ;;
+  *) usage_error "--db must be pgsql, mysqli or mariadb, not \"$db\"" ;;
+esac
+
+registry=''
+if [ -n "${CHECK_REGISTRY:-}" ]; then
+  registry=${CHECK_REGISTRY%/}/
+fi
+
+all_steps="phplint phpcs phpdoc validate savepoints mustache grunt phpunit"
+if [ ${#steps[@]} -eq 0 ]; then
+  steps=(phplint phpcs phpdoc validate savepoints mustache grunt phpunit)
+fi
+wants_phpunit=0
+for step in "${steps[@]}"; do
+  case $step in
+    phplint | phpcs | phpdoc | validate | savepoints | mustache | grunt) ;;
+    phpunit) wants_phpunit=1 ;;
+    *) usage_error "unknown step \"$step\". The steps are: $all_steps" ;;
+  esac
+done
+
+# --- Plugins --------------------------------------------------------------------
+
+# resolve_plugin <path>: print the absolute path of a plugin folder given from the
+# current folder or from the repo root.
+resolve_plugin() {
+  local path=$1
+  if [ -d "$path" ]; then
+    path=$(cd "$path" && pwd)
+  elif [ -d "$repo/$path" ]; then
+    path=$(cd "$repo/$path" && pwd)
+  else
+    die "$1 is not a folder"
+  fi
+  [ -f "$path/version.php" ] || die "$1 has no version.php, so it is not a plugin folder"
+  printf '%s\n' "$path"
+}
+
+plugins=()
+if [ ${#plugin_args[@]} -eq 0 ]; then
+  plugin_list=$("$repo/bin/list-plugins")
+  while IFS= read -r relative; do
+    if [ -n "$relative" ]; then
+      plugins+=("$repo/$relative")
+    fi
+  done <<<"$plugin_list"
+  [ ${#plugins[@]} -gt 0 ] || die "there are no plugins in $repo"
+else
+  for path in "${plugin_args[@]}"; do
+    dir=$(resolve_plugin "$path")
+    plugins+=("$dir")
+  done
+fi
+
+# --- Docker ---------------------------------------------------------------------
+
+command -v docker >/dev/null 2>&1 || die "docker is not installed. Install Docker and try again"
+docker info >/dev/null 2>&1 || die "cannot reach the Docker daemon. Is Docker running?"
+
+# Names for this run only, so two runs can go side by side. Nothing else is touched:
+# the clean-up removes just these.
+run_id=moodle-plugins-check-$$-$RANDOM
+network=$run_id
+db_container=$run_id-db
+ci_container=$run_id-ci
+image=moodle-plugins-ci:$php
+
+remove_containers() {
+  docker rm -f -v "$db_container" "$ci_container" >/dev/null 2>&1 || true
+}
+
+# Runs when the script ends, however it ends.
+# shellcheck disable=SC2329 # called by the trap below
+cleanup() {
+  if [ -n "$job_pid" ]; then
+    kill "$job_pid" 2>/dev/null || true
+  fi
+  remove_containers
+  docker network rm "$network" >/dev/null 2>&1 || true
+}
+
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+  note "building $image (the first run only, a few minutes)"
+  interruptible docker build --tag "$image" --build-arg "PHP_VERSION=$php" - < <(runner_dockerfile) 1>&2 ||
+    die "could not build $image"
+fi
+
+docker network create "$network" >/dev/null || die "could not create a Docker network"
+
+# wait_for_database: wait until the database container reports that it is healthy.
+wait_for_database() {
+  local state
+  for _ in $(seq 1 90); do
+    state=$(docker inspect --format '{{.State.Status}}/{{.State.Health.Status}}' "$db_container" 2>/dev/null || echo gone)
+    case $state in
+      running/healthy) return 0 ;;
+      running/starting) ;;
+      *) break ;;
+    esac
+    sleep 2
+  done
+  docker logs --tail 20 "$db_container" >&2 || true
+  die "the database container did not become ready"
+}
+
+# check_plugin <absolute path>: check one plugin in fresh containers. Prints PASS or
+# FAIL for each step and returns 1 when a step failed.
+check_plugin() {
+  local plugin=$1 step status=0
+  local -a extra install
+
+  note "starting the $db database"
+  docker run -d --name "$db_container" --network "$network" \
+    "${db_options[@]}" \
+    --health-cmd "$db_health" --health-interval 2s --health-timeout 5s --health-retries 90 \
+    "$registry$db_image" ${db_server_args[@]+"${db_server_args[@]}"} >/dev/null ||
+    die "could not start the database container. If the image cannot be pulled, see CHECK_REGISTRY in the usage"
+  docker run -d --name "$ci_container" --network "$network" --entrypoint sleep "$image" infinity >/dev/null ||
+    die "could not start the PHP container"
+  docker cp "$plugin" "$ci_container:/work/plugin" ||
+    die "could not copy the plugin into the PHP container"
+  wait_for_database
+
+  install=(install --plugin ./plugin --db-type "$db" --db-host "$db_container"
+    --db-user "$db_user" --db-pass "$db_pass" --branch "$branch")
+  if [ "$wants_phpunit" -eq 0 ]; then
+    # Only PHPUnit needs its test site, which is the slow part of the install.
+    install+=(--no-init)
+  fi
+
+  note "installing Moodle ($branch) and the plugin, which takes a few minutes"
+  if ! interruptible docker exec -w /work "$ci_container" moodle-plugin-ci "${install[@]}" 1>&2; then
+    printf 'FAIL install\n'
+    status=1
+  else
+    for step in "${steps[@]}"; do
+      extra=()
+      case $step in
+        phpcs | phpdoc) extra=(--max-warnings 0) ;;
+        grunt) extra=(--max-lint-warnings 0) ;;
+        phpunit) extra=(--fail-on-warning) ;;
+      esac
+      note "running $step"
+      if interruptible docker exec -w /work "$ci_container" moodle-plugin-ci "$step" ${extra[@]+"${extra[@]}"} 1>&2; then
+        printf 'PASS %s\n' "$step"
+      else
+        printf 'FAIL %s\n' "$step"
+        status=1
+      fi
+    done
+  fi
+
+  remove_containers
+  return "$status"
+}
+
+overall=0
+for plugin in "${plugins[@]}"; do
+  label=${plugin#"$repo"/}
+  printf '== %s: Moodle %s, PHP %s, %s\n' "$label" "$moodle" "$php" "$db"
+  if ! check_plugin "$plugin"; then
+    overall=1
+  fi
+done
+
+if [ "$overall" -eq 0 ]; then
+  echo "All checks passed."
+else
+  echo "Some checks failed."
+fi
+exit "$overall"

@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<libraries>
+  <library>
+    <location>lib/pdfparser</location>
+    <name>PdfParser</name>
+    <description>Reads text from PDF documents for the setup wizard.</description>
+    <license>LGPL</license>
+    <licenseversion>3.0</licenseversion>
+    <version>2.13.1</version>
+    <repository>https://github.com/smalot/pdfparser</repository>
+    <copyrights>
+      <copyright>Sebastien MALOT</copyright>
+    </copyrights>
+  </library>
+  <library>
+    <location>fonts</location>
+    <name>Source Sans 3 and Source Serif 4</name>
+    <description>Fonts embedded in transcript PDFs (converted to TCPDF format).</description>
+    <license>OFL</license>
+    <licenseversion>1.1</licenseversion>
+    <version>3.052 / 4.005</version>
+    <repository>https://github.com/adobe-fonts</repository>
+    <copyrights>
+      <copyright>Adobe (Source Sans 3)</copyright>
+      <copyright>The Source Serif 4 Project Authors</copyright>
+    </copyrights>
+  </library>
+</libraries>

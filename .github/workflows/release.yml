@@ -1,0 +1,50 @@
+name: Release
+
+# Pushing a tag <component>-v<release>, for example local_academictranscript-v1.0.0,
+# builds that plugin's ZIP and publishes it as a GitHub release, with the plugin's
+# CHANGES.md section for the release as the notes. bin/release-info stops the job
+# if the tag does not match the plugin's version.php or CHANGES.md.
+
+on:
+  push:
+    tags:
+      - '*-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish ${{ github.ref_name }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Read the tag
+        id: info
+        run: bin/release-info "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Build the ZIP
+        id: zip
+        env:
+          PLUGIN_PATH: ${{ steps.info.outputs.path }}
+        run: |
+          zip_path=$(bin/build-zip "$PLUGIN_PATH")
+          echo "path=$zip_path" >> "$GITHUB_OUTPUT"
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMPONENT: ${{ steps.info.outputs.component }}
+          RELEASE: ${{ steps.info.outputs.release }}
+          NOTES_FILE: ${{ steps.info.outputs.notes }}
+          ZIP_PATH: ${{ steps.zip.outputs.path }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$ZIP_PATH" \
+            --title "$COMPONENT $RELEASE" \
+            --notes-file "$NOTES_FILE" \
+            --verify-tag

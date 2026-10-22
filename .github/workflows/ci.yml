@@ -1,0 +1,196 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # The plugin folders, found by bin/list-plugins. The test job runs once for each.
+  plugins:
+    name: List the plugins
+    runs-on: ubuntu-24.04
+    outputs:
+      plugins: ${{ steps.list.outputs.plugins }}
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: List the plugin folders
+        id: list
+        run: |
+          plugins=$(bin/list-plugins --json)
+          echo "Plugins: $plugins"
+          echo "plugins=$plugins" >> "$GITHUB_OUTPUT"
+
+  # moodle-plugin-ci, as in its gha.dist.yml, for each plugin and each environment.
+  test:
+    name: ${{ matrix.plugin }} on Moodle ${{ matrix.env.moodle }}, PHP ${{ matrix.env.php }}, ${{ matrix.env.database }}
+    needs: plugins
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    services:
+      postgres:
+        image: ${{ matrix.env.database == 'pgsql' && 'postgres:17' || '' }}
+        env:
+          POSTGRES_USER: 'postgres'
+          POSTGRES_HOST_AUTH_METHOD: 'trust'
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 3
+
+      mariadb:
+        image: ${{ matrix.env.database == 'mariadb' && 'mariadb:11' || '' }}
+        env:
+          MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: '1'
+          MYSQL_CHARACTER_SET_SERVER: "utf8mb4"
+          MYSQL_COLLATION_SERVER: "utf8mb4_unicode_ci"
+        ports:
+          - 3306:3306
+        options: --health-cmd="healthcheck.sh --connect --innodb_initialized" --health-interval 10s --health-timeout 5s --health-retries 3
+
+      # A service container takes no command arguments, so the server keeps its
+      # default character set. moodle-plugin-ci creates the database as utf8mb4.
+      # MySQL 8.4 needs 15 to 30 seconds to initialise on its first start, and GitHub
+      # fails the job when a service container is unhealthy. The start period gives
+      # it time, and the retries cover a slow runner.
+      mysql:
+        image: ${{ matrix.env.database == 'mysqli' && 'mysql:8.4' || '' }}
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+        ports:
+          - 3306:3306
+        options: --health-cmd="mysqladmin ping -h 127.0.0.1" --health-interval 10s --health-timeout 5s --health-start-period 60s --health-retries 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: ${{ fromJSON(needs.plugins.outputs.plugins) }}
+        env:
+          - { moodle: MOODLE_405_STABLE, php: '8.1', database: pgsql }
+          - { moodle: MOODLE_405_STABLE, php: '8.3', database: mysqli }
+          - { moodle: MOODLE_501_STABLE, php: '8.2', database: mariadb }
+          - { moodle: MOODLE_502_STABLE, php: '8.3', database: mysqli }
+          - { moodle: MOODLE_503_STABLE, php: '8.3', database: pgsql }
+          - { moodle: MOODLE_503_STABLE, php: '8.4', database: mysqli }
+
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v6
+        with:
+          path: plugin
+          persist-credentials: false
+
+      - name: Setup PHP ${{ matrix.env.php }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.env.php }}
+          ini-values: max_input_vars=5000, opcache.enable_cli=1, opcache.jit=disable
+          # No code coverage is collected. Keep "none": with "none" and no
+          # extension, setup-php would fall back to phpdbg.
+          coverage: none
+
+      - name: Initialise moodle-plugin-ci
+        run: |
+          composer create-project -n --no-dev --prefer-dist moodlehq/moodle-plugin-ci ci ^4
+          echo "$PWD/ci/bin" >> "$GITHUB_PATH"
+          echo "$PWD/ci/vendor/bin" >> "$GITHUB_PATH"
+          sudo locale-gen en_AU.UTF-8
+          echo "NVM_DIR=$HOME/.nvm" >> "$GITHUB_ENV"
+
+      - name: Install moodle-plugin-ci
+        run: moodle-plugin-ci install --plugin ./plugin/${{ matrix.plugin }} --db-host=127.0.0.1
+        env:
+          DB: ${{ matrix.env.database }}
+          MOODLE_BRANCH: ${{ matrix.env.moodle }}
+
+      - name: PHP Lint
+        if: ${{ !cancelled() }}
+        run: moodle-plugin-ci phplint
+
+      - name: PHP Mess Detector
+        continue-on-error: true # This step will show errors but will not fail
+        if: ${{ !cancelled() }}
+        run: moodle-plugin-ci phpmd
+
+      - name: Moodle Code Checker
+        if: ${{ !cancelled() }}
+        run: moodle-plugin-ci phpcs --max-warnings 0
+
+      - name: Moodle PHPDoc Checker
+        if: ${{ !cancelled() }}
+        run: moodle-plugin-ci phpdoc --max-warnings 0
+
+      - name: Validating
+        if: ${{ !cancelled() }}
+        run: moodle-plugin-ci validate
+
+      - name: Check upgrade savepoints
+        if: ${{ !cancelled() }}
+        run: moodle-plugin-ci savepoints
+
+      - name: Mustache Lint
+        if: ${{ !cancelled() }}
+        run: moodle-plugin-ci mustache
+
+      - name: Grunt
+        if: ${{ !cancelled() }}
+        run: moodle-plugin-ci grunt --max-lint-warnings 0
+
+      - name: PHPUnit tests
+        if: ${{ !cancelled() }}
+        run: moodle-plugin-ci phpunit --fail-on-warning
+
+      - name: Behat features
+        id: behat
+        if: ${{ !cancelled() }}
+        run: moodle-plugin-ci behat --profile chrome --scss-deprecations
+
+      - name: Upload Behat Faildump
+        if: ${{ failure() && steps.behat.outcome == 'failure' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: Behat Faildump (${{ strategy.job-index }}, ${{ matrix.env.moodle }}, PHP ${{ matrix.env.php }}, ${{ matrix.env.database }})
+          path: ${{ github.workspace }}/moodledata/behat_dump
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Mark cancelled jobs as failed.
+        if: ${{ cancelled() }}
+        run: exit 1
+
+  # The repo's own tools, and a ZIP of every plugin that anyone can download from
+  # the run and install in Moodle to try a change.
+  package:
+    name: Package the plugins
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Test the tools in bin/
+        run: tests/run.sh
+
+      - name: Build the ZIPs
+        run: |
+          plugins=$(bin/list-plugins)
+          for plugin in $plugins; do
+            bin/build-zip "$plugin"
+          done
+
+      - name: Upload the ZIPs
+        uses: actions/upload-artifact@v7
+        with:
+          name: plugin-zips
+          path: dist/*.zip
+          retention-days: 14
+          if-no-files-found: error
+          # A re-run of the workflow uploads the same name again.
+          overwrite: true
