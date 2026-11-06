@@ -6,10 +6,10 @@ library that comes with Moodle. They are not the files that upstream publishes.
 Fonts
 -----
 Source Sans 3:   version 3.052, release 3.052R, https://github.com/adobe-fonts/source-sans
-Source Serif 4:  version 4.005, release 4.005R, https://github.com/adobe-fonts/source-serif
+Source Serif 4:  version 4.004 (as the font files report it), https://github.com/adobe-fonts/source-serif
 License:         SIL Open Font License 1.1. The texts are OFL-SourceSans3.txt and
                  OFL-SourceSerif4.txt in this folder.
-Copyright:       Adobe (Source Sans 3), The Source Serif 4 Project Authors (Source Serif 4)
+Copyright:       Adobe, with Reserved Font Name 'Source' (both fonts)
 Used by:         classes/local/pdf/document.php registers the fonts, and
                  classes/local/pdf/builder.php sets them.
 

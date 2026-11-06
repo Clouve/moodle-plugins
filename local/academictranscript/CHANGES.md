@@ -2,6 +2,52 @@
 
 Release notes for Academic Transcript, newest first.
 
+## 1.4.3
+
+This release adds Official transcript requests and a link to the Student Records plugin. Sites on 1.0.0 upgrade through Moodle's normal upgrade, which adds one table and one field. No setting changes on its own: the transcript keeps using this plugin's own data until an admin picks Student Records.
+
+For students:
+
+- My transcript shows the student's own transcript, the Unofficial download, a form to request an Official transcript, and the student's requests.
+- A request says how to send the transcript (email PDF, mail or pick up), who it goes to, and when (right away, after this term's grades, or after the degree).
+
+For registrars:
+
+- Transcript requests lists what is pending, waiting and on hold, and what was issued lately, with Issue and Reissue. The page is on the plugin's admin menu.
+- Official transcript fees are new settings: $5 for email, $10 for mail or pick up.
+
+For anyone who checks a transcript:
+
+- Official PDFs have a QR code next to the signature. It opens the verify page with the code filled in.
+- The verify page has a new design. It confirms the student, the date, the degree or program and who the transcript was sent to, and no longer shows the transcript itself, so a code never shows grades.
+
+With Student Records 1.4.6 or later:
+
+- The new setting "Source of the transcript" reads the student's details, terms, courses, grades, withdrawals, courses in progress, transfer credit and the conferred award from Student Records. GPAs, repeats and hours earned stay with this plugin.
+- "Post final grades" also saves the grade on the student's registration, on the school's grading scale there. The grade freeze and a grade set by the Registrar both block it.
+- "Request change" sends a grade change request to the Registrar in Student Records. It offers the school's marks (I, P, NP, W, NC and others).
+- The post page shows the current Student Records grade when it differs from the posted one.
+- The fee of a request goes on the student's account when billing is on. A hold puts a request on hold, and a request can wait for grades or the degree.
+
+Other changes:
+
+- A grade from Student Records that isn't on this plugin's scale or marks is listed as a problem and stops Official transcripts, because it would print with no points and no hours.
+- A hold stops every way of issuing an Official transcript, and a double click on Issue doesn't make a second transcript.
+- A change request goes to the registration that got the grade, so it reaches the right attempt of a course that ran twice. Each posted grade now keeps a link to its registration.
+- Posting stops, with a message, when a course runs again and the student has no new registration. It never replaces a finished attempt.
+- A grade posted here that isn't in Student Records is listed as a problem and stops Official transcripts, so it can't drop off without a word.
+- One failed posting no longer affects the other students in the batch.
+- Transcript requests has Cancel request on pending, waiting and on-hold rows. A reason is optional and goes in the activity log, and the fee stays on the account. An issued request can't be cancelled.
+- A transcript issued by a build from before 1.0.0 downloads in today's layout. The oldest copies, which can't be drawn again, now say so in plain words. Their verification codes keep working.
+- The upgrade drops the old `program` and `admissiondate` columns of those builds when they hold nothing else.
+- Requests are in the privacy export and deletion.
+- The activity log names the new actions.
+- The pages keep their look on a site without Student Records.
+- The pages follow Moodle 5.3's dark colour mode.
+- The delivery choices on the request form show the price on its own line, and an email typed before switching to mail or pick up no longer stops the form.
+- "After this term's grades" waits only for classes in a term that had started when the student asked.
+- The plugin is now under the MIT License. Earlier releases stay under the GNU GPL. The bundled library and fonts keep their licenses.
+
 ## 1.0.0
 
 First public release.

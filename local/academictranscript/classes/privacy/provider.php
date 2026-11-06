@@ -1,18 +1,4 @@
 <?php
-// This file is part of Moodle - https://moodle.org/
-//
-// Moodle is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// Moodle is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 namespace local_academictranscript\privacy;
 
@@ -28,10 +14,10 @@ use core_privacy\local\request\writer;
  *
  * The data subject is the student, and what the plugin keeps about a student is stored against the student's user
  * context: the student details, hand-entered codes, transfer credit, posted grades, the change requests on them, issued
- * transcripts, and the log entries about the student. A row that names a user only as the staff member who acted (who
- * changed it, posted it, issued it, asked for it or decided it, or who did what a log entry records about a student) is
- * part of the student's record. The metadata declares those fields, but the rows are not exported or deleted for that
- * staff member. A draft belongs to the user who uploaded the document.
+ * transcripts, the requests for Official transcripts, and the log entries about the student. A row that names a user
+ * only as the staff member who acted (who changed it, posted it, issued it, asked for it or decided it, or who did what
+ * a log entry records about a student) is part of the student's record. The metadata declares those fields, but the
+ * rows are not exported or deleted for that staff member. A draft belongs to the user who uploaded the document.
  *
  * A log entry about no student is different. A failed verification, written while the visitor was logged in, holds the
  * id and the IP address of that user and nothing about a student, so it belongs to that user: it gives the user a
@@ -47,7 +33,7 @@ use core_privacy\local\request\writer;
  *
  * @package    local_academictranscript
  * @copyright  2026 Clouve Inc.
- * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ * @license    https://opensource.org/license/mit MIT
  */
 class provider implements
     \core_privacy\local\metadata\provider,
@@ -58,7 +44,8 @@ class provider implements
      *      uploaded the document for a draft. The change requests and the log have their own rules.
      */
     const TABLES = ['local_academictranscript_student', 'local_academictranscript_code', 'local_academictranscript_issue',
-        'local_academictranscript_transfer', 'local_academictranscript_posted', 'local_academictranscript_draft'];
+        'local_academictranscript_transfer', 'local_academictranscript_posted', 'local_academictranscript_draft',
+        'local_academictranscript_request'];
 
     /** @var string[] The tables of the school's settings. They are declared in the metadata but never exported or deleted. */
     const SETTINGS_TABLES = ['local_academictranscript_grade', 'local_academictranscript_mark',
@@ -142,6 +129,23 @@ class provider implements
             'transcriptno' => 'privacy:metadata:transcriptno',
             'timecreated' => 'privacy:metadata:timecreated',
         ], 'privacy:metadata:issue');
+        $collection->add_database_table('local_academictranscript_request', [
+            'userid' => 'privacy:metadata:userid',
+            'delivery' => 'privacy:metadata:requestdelivery',
+            'recipient' => 'privacy:metadata:requestrecipient',
+            'email' => 'privacy:metadata:requestemail',
+            'address' => 'privacy:metadata:requestaddress',
+            'timing' => 'privacy:metadata:requesttiming',
+            'fee' => 'privacy:metadata:requestfee',
+            'charged' => 'privacy:metadata:requestcharged',
+            'status' => 'privacy:metadata:requeststatus',
+            'issueid' => 'privacy:metadata:issueid',
+            'issuedby' => 'privacy:metadata:issuedby',
+            'timeissued' => 'privacy:metadata:requesttimeissued',
+            'note' => 'privacy:metadata:note',
+            'timecreated' => 'privacy:metadata:requesttime',
+            'timemodified' => 'privacy:metadata:timemodified',
+        ], 'privacy:metadata:request');
         $collection->add_database_table('local_academictranscript_log', [
             'action' => 'privacy:metadata:action',
             'userid' => 'privacy:metadata:loguser',

@@ -1,25 +1,11 @@
 <?php
-// This file is part of Moodle - https://moodle.org/
-//
-// Moodle is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// Moodle is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
  * Admin settings and admin pages.
  *
  * @package    local_academictranscript
  * @copyright  2026 Clouve Inc.
- * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ * @license    https://opensource.org/license/mit MIT
  */
 
 defined('MOODLE_INTERNAL') || die();
@@ -92,6 +78,13 @@ if ($ADMIN->fulltree) {
 
     // Grades and hours.
     $settings->add(new admin_setting_heading("$p/gradesheading", $str('settings_grades'), $str('settings_grades_desc')));
+    $settings->add(new admin_setting_configselect(
+        "$p/source",
+        $str('source'),
+        $str('source_desc'),
+        \local_academictranscript\local\srsource::OWN,
+        \local_academictranscript\local\srsource::menu()
+    ));
     $settings->add(new admin_setting_configcheckbox("$p/roundpercent", $str('roundpercent'), $str('roundpercent_desc'), 1));
     $settings->add(new admin_setting_configselect(
         "$p/repeatrule",
@@ -116,6 +109,12 @@ if ($ADMIN->fulltree) {
         PARAM_TEXT,
         30
     ));
+
+    // Official transcript fees.
+    $settings->add(new admin_setting_heading("$p/feesheading", $str('settings_fees'), $str('settings_fees_desc')));
+    foreach (\local_academictranscript\local\requests::DELIVERY as [$name, $default]) {
+        $settings->add(new admin_setting_configtext("$p/$name", $str($name), '', $default, PARAM_FLOAT, 8));
+    }
 
     // Look.
     $settings->add(new admin_setting_heading("$p/lookheading", $str('settings_look'), ''));
@@ -219,6 +218,7 @@ $pages = [
     'terms' => ['terms.php', 'terms', 'local/academictranscript:managerecords'],
     'students' => ['students.php', 'studentstranscripts',
         ['local/academictranscript:managerecords', 'local/academictranscript:issueofficial']],
+    'requests' => ['requests.php', 'queue_title', 'local/academictranscript:issueofficial'],
     'approvals' => ['approvals.php', 'approvals', 'local/academictranscript:approvechanges'],
     'issued' => ['issued.php', 'issuedlog', 'local/academictranscript:viewissued'],
     'log' => ['log.php', 'activitylog', 'local/academictranscript:viewissued'],

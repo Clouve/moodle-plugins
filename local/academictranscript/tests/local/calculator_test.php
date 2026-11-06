@@ -1,18 +1,4 @@
 <?php
-// This file is part of Moodle - https://moodle.org/
-//
-// Moodle is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// Moodle is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 namespace local_academictranscript\local;
 
@@ -25,7 +11,7 @@ namespace local_academictranscript\local;
  * @package    local_academictranscript
  * @category   test
  * @copyright  2026 Clouve Inc.
- * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ * @license    https://opensource.org/license/mit MIT
  * @covers     \local_academictranscript\local\calculator
  */
 final class calculator_test extends \basic_testcase {
@@ -470,5 +456,19 @@ final class calculator_test extends \basic_testcase {
      */
     private function excluded_indexes(array $result): array {
         return array_keys(array_filter(array_column($result['attempts'], 'excluded')));
+    }
+
+    /**
+     * A grade is known when it is a letter or a mark of the scale, and not otherwise.
+     */
+    public function test_knows_letters_and_marks_only(): void {
+        $calculator = new calculator(
+            [['letter' => 'A', 'min' => 90, 'max' => 100, 'points' => 4, 'ingpa' => 1, 'earns' => 1]],
+            [['code' => 'W', 'earns' => 0]]
+        );
+
+        $this->assertTrue($calculator->knows('A'));
+        $this->assertTrue($calculator->knows('W'));
+        $this->assertFalse($calculator->knows('A-'));
     }
 }

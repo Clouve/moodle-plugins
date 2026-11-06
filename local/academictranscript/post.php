@@ -1,18 +1,4 @@
 <?php
-// This file is part of Moodle - https://moodle.org/
-//
-// Moodle is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// Moodle is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
  * Post final grades for the students of one course. Posting copies the grade to the transcript
@@ -20,12 +6,13 @@
  *
  * @package    local_academictranscript
  * @copyright  2026 Clouve Inc.
- * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ * @license    https://opensource.org/license/mit MIT
  */
 
 require_once(__DIR__ . '/../../config.php');
 
 use local_academictranscript\local\posting;
+use local_academictranscript\local\srpost;
 use local_academictranscript\local\terms;
 
 $courseid = required_param('courseid', PARAM_INT);
@@ -80,7 +67,7 @@ if (data_submitted() && confirm_sesskey()) {
 
 echo $OUTPUT->header();
 echo $OUTPUT->heading(get_string('postgrades', 'local_academictranscript'));
-echo html_writer::tag('p', get_string('postintro', 'local_academictranscript'));
+echo html_writer::tag('p', get_string(srpost::active() ? 'postintrosr' : 'postintro', 'local_academictranscript'));
 
 if (!$students) {
     echo $OUTPUT->notification(get_string('nostudents', 'local_academictranscript'), 'info');
@@ -101,6 +88,10 @@ foreach ($students as $uid => $u) {
     if ($p['posted']) {
         $status = get_string('postedon', 'local_academictranscript', ['grade' => s($p['posted']->grade),
             'date' => userdate($p['posted']->timeposted, get_string('strftimedatetimeshort', 'langconfig'))]);
+        $linked = srpost::posted_target($p['posted']);
+        if ($linked && $linked['grade'] !== '' && $linked['grade'] !== $p['posted']->grade) {
+            $status .= ' ' . get_string('nowinsr', 'local_academictranscript', s($linked['grade']));
+        }
         $status .= ' ' . html_writer::link(
             new moodle_url('/local/academictranscript/change.php', ['id' => $p['posted']->id]),
             get_string('requestchange', 'local_academictranscript')

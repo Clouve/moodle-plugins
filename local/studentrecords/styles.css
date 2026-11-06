@@ -1,0 +1,1083 @@
+/* Student Records page parts. Works with any theme; colours follow the theme's primary colour where possible.
+   Status colours (green, amber, red) are used only for status. All text colours meet WCAG 2.1 AA on white. */
+
+/* Colours are named once here. Moodle 5.3 sets data-bs-theme="dark" in its dark colour mode, and the dark values come from
+   Boost's own palette, which keeps text readable. Earlier versions never set it. */
+:root {
+    --srp-accent: #416180;
+    --srp-accent-line: #416180;
+    --srp-bad-bg: #fbe3e1;
+    --srp-bad-line: #a3231f;
+    --srp-bad-row: #fdf1f0;
+    --srp-bad-text: #8f1f1b;
+    --srp-bar-30: #94bce3;
+    --srp-bar-60: #597ea3;
+    --srp-bar-90: #314457;
+    --srp-bar-older: #1f2d3a;
+    --srp-border: #dee2e6;
+    --srp-border-strong: #b7b7ba;
+    --srp-chip: #f0f0f3;
+    --srp-good-bg: #e3f1e7;
+    --srp-good-line: #1e6b3a;
+    --srp-good-text: #1e5c33;
+    --srp-hover: #eef2f6;
+    --srp-info-bg: #eef6ff;
+    --srp-info-text: #1d2d3d;
+    --srp-kicker: #486077;
+    --srp-on-accent: #fff;
+    --srp-outline: #8f959e;
+    --srp-selected: #d6ebff;
+    --srp-strip: #f8f9fa;
+    --srp-surface: #fff;
+    --srp-text: #1d1f20;
+    --srp-text-muted: #5d5d60;
+    --srp-text-soft: #424244;
+    --srp-tint: #f5f5f8;
+    --srp-track: #e7e7ea;
+    --srp-warn-bg: #fdf0d5;
+    --srp-warn-line: #7a4b00;
+    --srp-warn-text: #6b4200;
+}
+
+:root[data-bs-theme="dark"] {
+    --srp-accent-line: var(--mds-border-interactive-primary-default);
+    --srp-bad-bg: var(--mds-bg-feedback-danger-light);
+    --srp-bad-line: var(--mds-text-feedback-danger);
+    --srp-bad-row: var(--mds-bg-feedback-danger-light);
+    --srp-bad-text: var(--mds-text-feedback-danger);
+    --srp-bar-30: #3f5e7d;
+    --srp-bar-60: #5d86ad;
+    --srp-bar-90: #8fb4d9;
+    --srp-bar-older: #c8dcf0;
+    --srp-border: var(--mds-border-default);
+    --srp-border-strong: var(--mds-border-interactive-secondary-default);
+    --srp-chip: var(--mds-bg-interactive-secondary-default);
+    --srp-good-bg: var(--mds-bg-feedback-success-light);
+    --srp-good-line: var(--mds-text-feedback-success);
+    --srp-good-text: var(--mds-text-feedback-success);
+    --srp-hover: var(--mds-bg-surface-subtle);
+    --srp-info-bg: var(--mds-bg-feedback-info-light);
+    --srp-info-text: var(--mds-text-feedback-info);
+    --srp-kicker: var(--mds-text-muted);
+    --srp-outline: var(--bs-gray-500);
+    --srp-selected: var(--mds-bg-feedback-primary-light);
+    --srp-strip: var(--mds-bg-surface-subtle);
+    --srp-surface: var(--mds-bg-surface-default);
+    --srp-text: var(--mds-text-emphasis);
+    --srp-text-muted: var(--mds-text-muted);
+    --srp-text-soft: var(--mds-text-default);
+    --srp-tint: var(--mds-bg-surface-subtle);
+    --srp-track: var(--mds-bg-interactive-secondary-default);
+    --srp-warn-bg: var(--mds-bg-feedback-warning-light);
+    --srp-warn-line: var(--mds-text-feedback-warning);
+    --srp-warn-text: var(--mds-text-feedback-warning);
+}
+
+.path-local-studentrecords .sr-lead {
+    font-size: 1.05rem;
+    color: var(--srp-text-soft);
+    margin-top: -0.5rem;
+}
+
+.sr-h2 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin: 1.5rem 0 0.75rem;
+}
+
+.sr-muted {
+    color: var(--srp-text-muted);
+}
+
+.sr-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin: 1rem 0 1.5rem;
+}
+
+/* Menu (left drawer in the Student Records theme; a folded box at the top in other themes). */
+.sr-nav-group + .sr-nav-group {
+    margin-top: 1.25rem;
+}
+
+.sr-nav-heading {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--srp-text-muted);
+    padding: 0 12px 8px;
+}
+
+.sr-nav-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.sr-nav-link {
+    display: block;
+    padding: 10px 12px;
+    margin-bottom: 2px;
+    border-radius: 6px;
+    font-size: 1rem;
+    color: var(--srp-text-soft);
+    text-decoration: none;
+}
+
+/* Boost underlines links in page text in dark mode, and a menu is not page text. */
+:root[data-bs-theme="dark"] #region-main .sr-inline-menu .sr-nav .sr-nav-group .sr-nav-list a.sr-nav-link,
+:root[data-bs-theme="dark"] #region-main .sr-seg.sr-seg.sr-seg.sr-seg.sr-seg.sr-seg a.sr-seg-item {
+    text-decoration: none;
+}
+
+.sr-nav-link:hover,
+.sr-nav-link:focus {
+    background: var(--srp-hover);
+    color: var(--srp-text);
+    text-decoration: none;
+}
+
+.sr-nav-link.active {
+    background: var(--srp-selected);
+    color: var(--srp-info-text);
+    font-weight: 600;
+}
+
+.sr-nav-note {
+    margin: 12px 12px 0;
+    font-size: 14px;
+    color: var(--srp-text-muted);
+}
+
+.sr-inline-menu {
+    border: 1px solid var(--srp-border);
+    border-radius: 6px;
+    padding: 8px 12px;
+}
+
+.sr-inline-menu > summary {
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.sr-inline-menu .sr-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.25rem 2rem;
+    margin-top: 8px;
+}
+
+.sr-inline-menu .sr-nav-group + .sr-nav-group {
+    margin-top: 0;
+}
+
+/* Student Records pages use the full width (Boost keeps standard pages narrow). */
+@media (min-width: 768px) {
+    body.path-local-studentrecords.pagelayout-standard #page.drawers .main-inner,
+    body.path-local-academictranscript.pagelayout-standard #page.drawers .main-inner {
+        max-width: 1240px;
+    }
+}
+
+.path-local-studentrecords .btn-outline-secondary,
+.path-local-academictranscript .btn-outline-secondary {
+    color: var(--srp-text);
+    border-color: var(--srp-outline);
+    font-weight: 600;
+}
+
+.path-local-studentrecords .btn-outline-secondary:hover,
+.path-local-academictranscript .btn-outline-secondary:hover {
+    background: var(--srp-tint);
+    color: var(--srp-text);
+}
+
+/* Stat tiles. */
+.sr-tiles {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 20px;
+    margin: 1rem 0 1.5rem;
+}
+
+.sr-tiles-3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.sr-tiles-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.sr-tiles-1 {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.sr-tile {
+    background: var(--srp-surface);
+    border: 1px solid var(--srp-border);
+    border-radius: 6px;
+    padding: 20px;
+}
+
+.sr-tile-label {
+    font-size: 15px;
+    color: var(--srp-text-soft);
+}
+
+.sr-tile-value {
+    font-size: 2rem;
+    font-weight: 700;
+    line-height: 1.2;
+    margin: 6px 0;
+    color: var(--srp-text);
+    overflow-wrap: anywhere;
+}
+
+.sr-tile-sub {
+    font-size: 15px;
+    color: var(--srp-text-soft);
+}
+
+.sr-tone-good,
+.sr-tile-value.sr-tone-good {
+    color: var(--srp-good-line);
+}
+
+.sr-tone-warn,
+.sr-tile-value.sr-tone-warn {
+    color: var(--srp-warn-line);
+}
+
+.sr-tone-bad,
+.sr-tile-value.sr-tone-bad {
+    color: var(--srp-bad-line);
+}
+
+/* Status tags. */
+.sr-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: nowrap;
+}
+
+.sr-tag-neutral {
+    background: var(--srp-chip);
+    color: var(--srp-text-soft);
+}
+
+.sr-tag-info {
+    background: var(--srp-info-bg);
+    color: var(--srp-info-text);
+}
+
+.sr-tag-good {
+    background: var(--srp-good-bg);
+    color: var(--srp-good-text);
+}
+
+.sr-tag-warn {
+    background: var(--srp-warn-bg);
+    color: var(--srp-warn-text);
+}
+
+.sr-tag-bad {
+    background: var(--srp-bad-bg);
+    color: var(--srp-bad-text);
+}
+
+/* Cards, columns, lists. */
+.sr-card {
+    background: var(--srp-surface);
+    border: 1px solid var(--srp-border);
+    border-radius: 6px;
+    padding: 20px;
+}
+
+.sr-card-title {
+    font-size: 1.15rem;
+    font-weight: 700;
+    margin: 0 0 8px;
+}
+
+.sr-card-kicker {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--srp-kicker);
+    margin-bottom: 10px;
+}
+
+.sr-card-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.sr-card-divider {
+    border-top: 1px solid var(--srp-border);
+    padding-top: 12px;
+    margin-top: 4px;
+}
+
+.sr-card-big {
+    font-size: 1.5rem;
+    font-weight: 700;
+}
+
+.sr-card-sub {
+    color: var(--srp-text-soft);
+    margin: 8px 0;
+}
+
+.sr-card-links a {
+    display: inline-block;
+    margin-top: 8px;
+}
+
+.sr-columns {
+    display: grid;
+    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+    gap: 32px;
+}
+
+.sr-table {
+    width: 100%;
+    margin-bottom: 1rem;
+    border: 0;
+}
+
+.sr-table th,
+.sr-table td {
+    border-left: 0;
+    border-right: 0;
+    border-top: 0;
+}
+
+.sr-table th {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--srp-text-muted);
+    border-bottom: 1px solid var(--srp-border);
+    padding: 8px 6px;
+}
+
+.sr-table td {
+    border-bottom: 1px solid var(--srp-border);
+    padding: 10px 6px;
+    vertical-align: top;
+}
+
+.sr-attn,
+.sr-msgs,
+.sr-bars {
+    list-style: none;
+    margin: 0 0 1rem;
+    padding: 0;
+}
+
+.sr-attn li {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--srp-border);
+}
+
+.sr-attn-text {
+    flex: 1;
+}
+
+.sr-attn-count {
+    font-weight: 700;
+}
+
+.sr-msgs li {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--srp-border);
+}
+
+.sr-msg-meta {
+    font-size: 14px;
+    color: var(--srp-text-muted);
+}
+
+.sr-quicklinks {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.sr-quick {
+    text-align: left;
+    font-weight: 600;
+    padding: 10px 12px;
+    color: var(--srp-text);
+}
+
+.sr-empty {
+    padding: 16px;
+    border: 1px dashed var(--srp-border-strong);
+    border-radius: 6px;
+    color: var(--srp-text-soft);
+    text-align: center;
+}
+
+.sr-search {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 1.5rem;
+    max-width: 960px;
+}
+
+.sr-search .form-control {
+    flex: 1;
+}
+
+/* Payment plan steps. */
+.sr-plan {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    list-style: none;
+    margin: 0 0 1.5rem;
+    padding: 0;
+    border: 1px solid var(--srp-border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.sr-plan-step {
+    padding: 14px 16px;
+    border-right: 1px solid var(--srp-border);
+}
+
+.sr-plan-step .sr-tag {
+    margin-top: 6px;
+}
+
+/* Registration steps, cart and cost. */
+.sr-steps {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    list-style: none;
+    margin: 0 0 1.5rem;
+    padding: 0;
+    border: 1px solid var(--srp-border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.sr-step {
+    padding: 12px 16px;
+    color: var(--srp-text-soft);
+    border-right: 1px solid var(--srp-border);
+}
+
+.sr-step.active {
+    background: var(--srp-info-bg);
+    color: var(--srp-info-text);
+    font-weight: 700;
+}
+
+.sr-filter {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: flex-end;
+    margin-bottom: 1rem;
+}
+
+.sr-field label {
+    display: block;
+    font-size: 14px;
+    color: var(--srp-text-soft);
+    margin-bottom: 4px;
+}
+
+.sr-field-grow {
+    flex: 1 1 240px;
+}
+
+.sr-filter-top {
+    align-items: flex-start;
+}
+
+.sr-field-fixed {
+    flex: 0 1 15rem;
+}
+
+.sr-field-hint {
+    font-size: 13px;
+    color: var(--srp-text-muted);
+    margin-top: 4px;
+}
+
+.sr-cartlist,
+.sr-costlines {
+    list-style: none;
+    margin: 0 0 12px;
+    padding: 0;
+}
+
+.sr-cartlist li {
+    padding: 8px 0;
+}
+
+.sr-costlines {
+    border-top: 1px solid var(--srp-border);
+    padding-top: 10px;
+}
+
+.sr-costlines li,
+.sr-costtotal {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 4px 0;
+}
+
+.sr-costtotal {
+    font-size: 1.35rem;
+    font-weight: 700;
+    margin: 8px 0;
+}
+
+.sr-total {
+    font-size: 1.25rem;
+    font-weight: 700;
+}
+
+.sr-success {
+    background: var(--srp-good-bg);
+    color: var(--srp-good-text);
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin-bottom: 1rem;
+}
+
+.sr-success .sr-h2 {
+    color: var(--srp-good-text);
+}
+
+.sr-review {
+    max-width: 640px;
+}
+
+/* Program progress. */
+.sr-progress {
+    height: 12px;
+    background: var(--srp-track);
+    border-radius: 2px;
+    overflow: hidden;
+    margin: 6px 0 12px;
+}
+
+.sr-progress-bar {
+    display: block;
+    height: 100%;
+    background: var(--srp-accent);
+}
+
+.sr-programs {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 20px;
+    margin-bottom: 1.5rem;
+}
+
+.sr-termhead {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+/* Student file (staff). */
+.sr-file-header {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 1rem;
+}
+
+.sr-file-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.sr-avatar {
+    display: inline-grid;
+    place-items: center;
+    width: 72px;
+    height: 72px;
+    border-radius: 6px;
+    background: var(--srp-track);
+    color: var(--srp-text-soft);
+    font-size: 1.6rem;
+    font-weight: 700;
+}
+
+.sr-file-name {
+    font-size: 1.75rem;
+    font-weight: 700;
+    margin: 0;
+}
+
+.sr-file-meta {
+    color: var(--srp-text-soft);
+}
+
+.sr-file-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.sr-tabs-wrap {
+    margin-bottom: 1.25rem;
+}
+
+.sr-tabs.nav {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.sr-tabs .nav-link {
+    white-space: nowrap;
+    color: var(--srp-text);
+}
+
+.sr-tabs .nav-link.active {
+    font-weight: 700;
+}
+
+.sr-facts {
+    display: grid;
+    grid-template-columns: minmax(110px, auto) 1fr;
+    gap: 8px 16px;
+    margin: 0 0 1rem;
+}
+
+.sr-facts dt {
+    font-weight: 400;
+    color: var(--srp-text-muted);
+}
+
+.sr-facts dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.sr-profile-cols {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 24px;
+}
+
+/* Segmented filters (admissions). */
+.sr-seg {
+    display: inline-flex;
+    flex-wrap: wrap;
+    border: 1px solid var(--srp-border-strong);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-bottom: 1rem;
+}
+
+.sr-seg-item {
+    padding: 8px 14px;
+    color: var(--srp-text);
+    border-right: 1px solid var(--srp-border);
+    text-decoration: none;
+}
+
+.sr-seg-item:hover,
+.sr-seg-item:focus {
+    background: var(--srp-tint);
+    color: var(--srp-text);
+}
+
+.sr-seg-item.active {
+    background: var(--srp-accent);
+    color: var(--srp-on-accent);
+}
+
+.sr-row-selected td {
+    background: var(--srp-info-bg);
+}
+
+.sr-checklist {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 8px;
+}
+
+.sr-checklist li {
+    padding: 6px 0;
+}
+
+/* Cards grid, notes, requirement rows. */
+.sr-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 20px;
+    margin-bottom: 1.5rem;
+}
+
+.sr-card-dim {
+    opacity: .75;
+}
+
+.sr-note {
+    border-radius: 6px;
+    padding: 12px 14px;
+    margin: 12px 0;
+}
+
+.sr-note-good {
+    background: var(--srp-good-bg);
+    color: var(--srp-good-text);
+}
+
+.sr-note-warn {
+    background: var(--srp-warn-bg);
+    color: var(--srp-warn-text);
+}
+
+.sr-note-bad {
+    background: var(--srp-bad-bg);
+    color: var(--srp-bad-text);
+}
+
+.sr-reqs {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--srp-border);
+}
+
+.sr-reqs li {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: center;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--srp-border);
+}
+
+.sr-progress-thin {
+    height: 6px;
+    margin: 4px 0 0;
+}
+
+/* Take attendance. */
+.sr-att-head,
+.sr-att-row {
+    display: grid;
+    grid-template-columns: minmax(160px, 1.3fr) minmax(300px, 2fr) 90px minmax(140px, 1.3fr);
+    gap: 12px;
+    align-items: center;
+}
+
+.sr-att-head {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--srp-text-muted);
+    border-bottom: 1px solid var(--srp-border);
+    padding: 8px 0;
+}
+
+.sr-att-row {
+    border: 0;
+    border-bottom: 1px solid var(--srp-border);
+    padding: 10px 0;
+    margin: 0;
+}
+
+.sr-att-name {
+    font-size: 1rem;
+    font-weight: 700;
+    float: none;
+    margin: 0;
+    padding: 0;
+}
+
+.sr-seg-group {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+}
+
+.sr-seg-input {
+    position: absolute;
+    opacity: 0;
+    width: 1px;
+    height: 1px;
+}
+
+.sr-seg-label {
+    display: block;
+    text-align: center;
+    padding: 8px 4px;
+    border: 1px solid var(--srp-border-strong);
+    border-radius: 6px;
+    cursor: pointer;
+    margin: 0;
+}
+
+.sr-seg-input:focus-visible + .sr-seg-label {
+    outline: 2px solid var(--srp-accent-line);
+    outline-offset: 2px;
+}
+
+.sr-seg-input:checked + .sr-seg-present {
+    background: var(--srp-good-bg);
+    border-color: var(--srp-good-line);
+    color: var(--srp-good-text);
+}
+
+.sr-seg-input:checked + .sr-seg-late {
+    background: var(--srp-warn-bg);
+    border-color: var(--srp-warn-line);
+    color: var(--srp-warn-text);
+}
+
+.sr-seg-input:checked + .sr-seg-absent {
+    background: var(--srp-bad-bg);
+    border-color: var(--srp-bad-line);
+    color: var(--srp-bad-text);
+}
+
+.sr-seg-input:checked + .sr-seg-excused {
+    background: var(--srp-info-bg);
+    border-color: var(--srp-accent-line);
+    color: var(--srp-info-text);
+}
+
+.sr-att-save {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin: 1rem 0;
+}
+
+/* Setup wizard. */
+.sr-wiz {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    list-style: none;
+    padding: 0;
+    margin: 0 0 1.5rem;
+}
+
+.sr-wiz-step {
+    display: inline-block;
+    padding: 6px 10px;
+    border-radius: 6px;
+    color: var(--srp-text-soft);
+    text-decoration: none;
+}
+
+.sr-wiz-step.active {
+    background: var(--srp-selected);
+    color: var(--srp-info-text);
+    font-weight: 700;
+}
+
+.sr-wiz-step.done .sr-step-no {
+    color: var(--srp-good-line);
+}
+
+.sr-wiz-nav {
+    display: flex;
+    gap: 12px;
+    border-top: 1px solid var(--srp-border);
+    padding-top: 16px;
+    margin-top: 24px;
+}
+
+.sr-details > summary {
+    cursor: pointer;
+}
+
+@media (max-width: 767.98px) {
+    .sr-att-head {
+        display: none;
+    }
+    .sr-att-row {
+        grid-template-columns: 1fr 80px;
+    }
+    .sr-att-who,
+    .sr-seg-group,
+    .sr-att-note {
+        grid-column: 1 / -1;
+    }
+    .sr-reqs li {
+        grid-template-columns: 1fr auto;
+    }
+    .sr-req-value {
+        display: none;
+    }
+    .sr-tabs-wrap {
+        mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+        -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+    }
+}
+
+/* Who owes money bars. */
+.sr-bars li {
+    display: grid;
+    grid-template-columns: 110px minmax(0, 1fr) 110px;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 0;
+}
+
+.sr-bar-track {
+    display: block;
+    height: 22px;
+    background: var(--srp-tint);
+}
+
+.sr-bar-fill {
+    display: block;
+    height: 100%;
+}
+
+.sr-bar-d30 {
+    background: var(--srp-bar-30);
+}
+
+.sr-bar-d60 {
+    background: var(--srp-bar-60);
+}
+
+.sr-bar-d90 {
+    background: var(--srp-bar-90);
+}
+
+.sr-bar-older {
+    background: var(--srp-bar-older);
+}
+
+.sr-bar-value {
+    text-align: right;
+}
+
+/* Dashboard strip and side card on Moodle pages. */
+.sr-strip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    background: var(--srp-strip);
+    border: 1px solid var(--srp-border);
+    border-radius: 6px;
+    padding: 14px 18px;
+}
+
+.sr-strip-title {
+    margin-right: 16px;
+}
+
+.sr-strip-sep {
+    margin: 0 8px;
+    color: var(--srp-text-muted);
+}
+
+.sr-strip-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.sr-sidecard {
+    margin-bottom: 1rem;
+}
+
+@media (max-width: 991.98px) {
+    .sr-columns {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 8px;
+    }
+    .sr-tiles,
+    .sr-tiles-3 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 575.98px) {
+    .sr-tiles,
+    .sr-tiles-3,
+    .sr-tiles-2 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0;
+        border: 1px solid var(--srp-border);
+        border-radius: 6px;
+        overflow: hidden;
+    }
+    .sr-tile {
+        border: 0;
+        border-radius: 0;
+        border-right: 1px solid var(--srp-border);
+        border-bottom: 1px solid var(--srp-border);
+        padding: 14px;
+    }
+    .sr-tile-value {
+        font-size: 1.6rem;
+    }
+    .sr-tile-sub,
+    .sr-tile-link {
+        display: none;
+    }
+    .sr-actions .btn {
+        flex: 1 1 45%;
+    }
+    .sr-strip {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .sr-bars li {
+        grid-template-columns: 1fr auto;
+    }
+    .sr-bar-track {
+        display: none;
+    }
+    .sr-quicklinks {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+/* Links inside text are underlined, so they do not rely on colour alone (WCAG 1.4.1). */
+.path-local-studentrecords #region-main p a:not(.btn),
+.path-local-studentrecords #region-main td a:not(.btn),
+.path-local-studentrecords #region-main dd a:not(.btn),
+.path-local-studentrecords .sr-card-links a:not(.btn),
+.path-local-studentrecords .sr-tile-link a,
+.path-local-academictranscript #region-main p a:not(.btn),
+.path-local-academictranscript #region-main td a:not(.btn) {
+    text-decoration: underline;
+}
+
+.sr-row-bad td {
+    background: var(--srp-bad-row);
+}
+
+.sr-programs a:not(.btn) {
+    text-decoration: underline;
+}

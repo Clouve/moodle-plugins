@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<XMLDB PATH="local/academictranscript/db" VERSION="20261021" COMMENT="XMLDB file for local/academictranscript"
+<XMLDB PATH="local/academictranscript/db" VERSION="20261116" COMMENT="XMLDB file for local/academictranscript"
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
     xsi:noNamespaceSchemaLocation="../../../lib/xmldb/xmldb.xsd"
 >
@@ -173,6 +173,7 @@
         <FIELD NAME="postedby" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
         <FIELD NAME="timeposted" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="srregid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="The registration in Student Records that got this grade, when it went there"/>
       </FIELDS>
       <KEYS>
         <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
@@ -267,6 +268,35 @@
       </KEYS>
       <INDEXES>
         <INDEX NAME="statustype" UNIQUE="false" FIELDS="status, itemtype"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="local_academictranscript_request" COMMENT="Official transcript requests from students (delivery, recipient, fee, status)">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="The student"/>
+        <FIELD NAME="delivery" TYPE="char" LENGTH="10" NOTNULL="true" DEFAULT="email" SEQUENCE="false" COMMENT="email, mail or pickup"/>
+        <FIELD NAME="recipient" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="Person or office"/>
+        <FIELD NAME="email" TYPE="char" LENGTH="255" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="address" TYPE="text" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="timing" TYPE="char" LENGTH="10" NOTNULL="true" DEFAULT="now" SEQUENCE="false" COMMENT="now, grades or degree"/>
+        <FIELD NAME="fee" TYPE="number" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" DECIMALS="2"/>
+        <FIELD NAME="charged" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="1 = fee added to the Student Records account"/>
+        <FIELD NAME="status" TYPE="char" LENGTH="10" NOTNULL="true" DEFAULT="pending" SEQUENCE="false" COMMENT="pending, issued or cancelled"/>
+        <FIELD NAME="issueid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="issuedby" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="timeissued" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="note" TYPE="char" LENGTH="255" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="userid" TYPE="foreign" FIELDS="userid" REFTABLE="user" REFFIELDS="id"/>
+        <KEY NAME="issueid" TYPE="foreign" FIELDS="issueid" REFTABLE="local_academictranscript_issue" REFFIELDS="id"/>
+        <KEY NAME="issuedby" TYPE="foreign" FIELDS="issuedby" REFTABLE="user" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="status" UNIQUE="false" FIELDS="status"/>
       </INDEXES>
     </TABLE>
   </TABLES>

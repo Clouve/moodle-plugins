@@ -6,7 +6,8 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage: bin/check [--moodle 4.5|5.1|5.2|5.3] [--php 8.1|8.2|8.3|8.4]
-                 [--db pgsql|mysqli|mariadb] [--plugin <path>]... [<step>...]
+                 [--db pgsql|mysqli|mariadb] [--plugin <path>]... [--together]
+                 [<step>...]
 
 Runs the CI checks of this repo on its plugins in Docker, except the PHP Mess
 Detector and Behat, so Docker is all you need to install. For each plugin it
@@ -22,6 +23,9 @@ Options:
                       (MariaDB 11) (default pgsql)
   --plugin <path>     Plugin folder to check, from the current folder or from the
                       repo root. Repeat it for several. Default: every plugin.
+  --together          Install the other plugins of this repo next to the plugin
+                      being checked. Tests that need a sibling plugin are skipped
+                      without this.
 
 Steps (default: all of them, in this order):
   phplint phpcs phpdoc validate savepoints mustache grunt phpunit
@@ -45,13 +49,14 @@ EOF
 # The Dockerfile of the runner image: PHP with Moodle's extensions from moodlehq's
 # image, plus what moodle-plugin-ci needs. Node comes first, through nvm, because
 # the install script of moodle-plugin-ci runs npm. The database clients are there
-# because moodle-plugin-ci creates the database with psql or mysql.
+# because moodle-plugin-ci creates the database with psql or mysql, and Java because
+# the mustache step validates the HTML of a template with it.
 runner_dockerfile() {
   cat <<'DOCKERFILE'
 ARG PHP_VERSION=8.3
 FROM moodlehq/moodle-php-apache:${PHP_VERSION}
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git unzip locales curl ca-certificates poppler-utils postgresql-client default-mysql-client \
+ && apt-get install -y --no-install-recommends git unzip locales curl ca-certificates poppler-utils postgresql-client default-mysql-client default-jre-headless \
  && sed -i 's/^# *en_AU.UTF-8 UTF-8/en_AU.UTF-8 UTF-8/; s/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \
  && locale-gen \
  && rm -rf /var/lib/apt/lists/*
@@ -114,12 +119,18 @@ php=8.3
 db=pgsql
 plugin_args=()
 steps=()
+together=0
 
 while [ $# -gt 0 ]; do
   case $1 in
     -h | --help)
       usage
       exit 0
+      ;;
+    --together)
+      together=1
+      shift
+      continue
       ;;
     --moodle | --php | --db | --plugin)
       [ $# -ge 2 ] || usage_error "$1 needs a value"
@@ -299,7 +310,7 @@ wait_for_database() {
 # check_plugin <absolute path>: check one plugin in fresh containers. Prints PASS or
 # FAIL for each step and returns 1 when a step failed.
 check_plugin() {
-  local plugin=$1 step status=0
+  local plugin=$1 step status=0 other
   local -a extra install
 
   note "starting the $db database"
@@ -316,6 +327,16 @@ check_plugin() {
 
   install=(install --plugin ./plugin --db-type "$db" --db-host "$db_container"
     --db-user "$db_user" --db-pass "$db_pass" --branch "$branch")
+  if [ "$together" -eq 1 ]; then
+    docker exec "$ci_container" mkdir -p /work/extra || die "could not make the folder for the other plugins"
+    while IFS= read -r other; do
+      if [ -n "$other" ] && [ "$repo/$other" != "$plugin" ]; then
+        docker cp "$repo/$other" "$ci_container:/work/extra/${other//\//_}" ||
+          die "could not copy $other into the PHP container"
+      fi
+    done <<<"$("$repo/bin/list-plugins")"
+    install+=(--extra-plugins ./extra)
+  fi
   if [ "$wants_phpunit" -eq 0 ]; then
     # Only PHPUnit needs its test site, which is the slow part of the install.
     install+=(--no-init)
@@ -329,7 +350,8 @@ check_plugin() {
     for step in "${steps[@]}"; do
       extra=()
       case $step in
-        phpcs | phpdoc) extra=(--max-warnings 0) ;;
+        phpcs) extra=(--max-warnings 0 --exclude moodle.Files.BoilerplateComment) ;;
+        phpdoc) extra=(--max-warnings 0) ;;
         grunt) extra=(--max-lint-warnings 0) ;;
         phpunit) extra=(--fail-on-warning) ;;
       esac

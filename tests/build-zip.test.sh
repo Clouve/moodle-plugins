@@ -36,9 +36,11 @@ assert_eq "every entry starts with academictranscript/" "" "$outside"
 has_version=$(printf '%s\n' "$list" | grep -cx 'academictranscript/version.php' || true)
 assert_eq "includes academictranscript/version.php" "1" "$has_version"
 
-# The bundled pdfparser is LGPL-3.0, which asks for the GNU GPL text to travel with
-# the combined work. The ZIP holds only the plugin folder, so the folder needs its
-# own copy of the repo's LICENSE.
+# The ZIP holds only the plugin folder, so the folder needs its own copy of the repo's
+# LICENSE. The bundled pdfparser is LGPL-3.0, which asks for the GNU GPL text to travel
+# with the combined work, so that text sits next to it.
+has_gpl=$(printf '%s\n' "$list" | grep -cx 'academictranscript/lib/pdfparser/GPL-3.0.txt' || true)
+assert_eq "includes the GNU GPL text next to pdfparser" "1" "$has_gpl"
 has_license=$(printf '%s\n' "$list" | grep -cx 'academictranscript/LICENSE' || true)
 assert_eq "includes academictranscript/LICENSE" "1" "$has_license"
 if unzip -p "$zip" academictranscript/LICENSE 2>/dev/null | cmp -s - "$REAL_REPO/LICENSE"; then
@@ -46,6 +48,10 @@ if unzip -p "$zip" academictranscript/LICENSE 2>/dev/null | cmp -s - "$REAL_REPO
 else
   fail "and it is the LICENSE of the repo, byte for byte"
 fi
+
+for folder in local/academictranscript local/studentrecords theme/studentrecords; do
+  assert_file "$folder has a LICENSE file" "$REAL_REPO/$folder/LICENSE"
+done
 
 junk=$(printf '%s\n' "$list" | grep -E '(^|/)\.DS_Store$|\.swp$|(^|/)\.git' || true)
 assert_eq "has no .DS_Store, *.swp or .git* entries" "" "$junk"

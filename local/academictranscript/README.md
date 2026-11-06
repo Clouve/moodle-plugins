@@ -2,18 +2,20 @@
 
 Academic Transcript (`local_academictranscript`) is a Moodle plugin for Moodle 4.5 to 5.3. It makes academic transcripts from the final grades in your courses. Students can download an Unofficial copy at any time. Staff issue Official transcripts as PDF files with a verification code and a digital signature, and anyone who holds a code can check an Official transcript on a public page.
 
-[Clouve Inc.](https://clouve.com) maintains the plugin. It is licensed under the GNU General Public License, version 3 or later.
+[Clouve Inc.](https://clouve.com) maintains the plugin. It is licensed under the MIT License.
 
 ## What it does
 
-- Students see their own transcript and download an Unofficial copy, a PDF with an unofficial watermark.
+- Students see their own transcript on My transcript and download an Unofficial copy, a PDF with an unofficial watermark. They can also request an Official transcript there: by email, by mail or for pick up, right away or after grades or the degree.
+- The registrar works through those requests on the Transcript requests page.
 - Teachers and managers issue Official transcripts for a named recipient (the "Issued To" field is required). Each Official transcript gets a transcript number and a 24-character verification code, is frozen as issued, and is digitally signed.
-- Anyone can check a code on the public verify page. It shows the transcript as issued, without the date of birth.
+- Anyone can check a code on the public verify page, or scan the QR code on an Official transcript. The page confirms the student, the date, the degree or program and who it was sent to. It shows no grades and no date of birth.
 - Teachers post final grades from a course. Posting copies the grade to the transcript and locks the student's course total in the gradebook. A later change needs a reason and an admin's approval. Until a grade is posted, the course shows as IP (In Progress).
 - Teachers can enter a transcript code (P, NP, I, NC, W or a mark of your own) and a note for a student in a course. The code replaces the letter grade on the transcript. The gradebook doesn't change.
 - The school sets its own grading scale, programs (credit hours or clock hours) and course catalog. It also decides which marks don't count in the GPA and which attempts of a repeated course count. All attempts stay on the transcript.
 - A setup wizard takes an admin through the setup. It can read grading policies and course catalogs with the site's AI provider, or take CSV files. Nothing is saved until an admin approves it.
-- An activity log records views, downloads, issues, verifications, postings and changes.
+- An activity log records views, downloads, issues, verifications, postings, requests and changes.
+- With the Student Records plugin, the transcript can read its data from there. See "With Student Records".
 
 An Official transcript shows the academic record grouped by term, with the GPA of each term, the transfer credit and a summary. It has a signature, seal and verify block and a privacy footer. The last page is the Transcript Key. The paper size is US Letter or A4.
 
@@ -24,6 +26,7 @@ An Official transcript shows the academic record grouped by term, with the GPA o
 - PostgreSQL, MySQL or MariaDB.
 - The PHP OpenSSL extension, which Moodle needs anyway. The plugin uses it to sign Official transcripts. Without it, Official transcripts are issued unsigned and say so.
 - Optional: an AI provider with the "Generate text" action (Site administration > AI > AI providers), to read documents in the setup wizard.
+- Optional: [Student Records](../studentrecords/README.md) (`local_studentrecords`) 1.4.6 or later. The plugin works without it.
 
 ## Install
 
@@ -64,8 +67,9 @@ After the wizard:
 
 - Students: the profile page, under Reports, has "Academic transcript" (`/local/academictranscript/index.php`). Staff who may see a student's transcript find the same link on the student's profile.
 - Teachers: in a course, the More menu has "Transcript codes", "Post final grades" and "Students' transcripts".
-- Admins: Site administration > Plugins > Local plugins > Academic Transcript. It has the Setup wizard, Transcript settings, Grading scale, Marks not used in GPA, Programs, Course catalog, Drafts to review, Terms, Students' transcripts, Grade change approvals, Issued Official transcripts, Activity log and Course codes check pages. A student's transcript page gives admins three more buttons: Edit student details, Transfer credit and Course terms. Course terms overrides the term of a course for that student.
+- Admins: Site administration > Plugins > Local plugins > Academic Transcript. It has the Setup wizard, Transcript settings, Grading scale, Marks not used in GPA, Programs, Course catalog, Drafts to review, Terms, Students' transcripts, Transcript requests, Grade change approvals, Issued Official transcripts, Activity log and Course codes check pages. A student's transcript page gives admins three more buttons: Edit student details, Transfer credit and Course terms. Course terms overrides the term of a course for that student.
 - Anyone with a verification code: `/local/academictranscript/verify.php`. It needs no login.
+- Registrars: Transcript requests (`/local/academictranscript/requests.php`). It is on the Academic Transcript admin menu, and in the Student Records menu when that plugin is installed.
 
 Moodle 4.5 creates the Local plugins category only for site administrators. On Moodle 4.5, staff who aren't site administrators, such as managers, find the same pages under Site administration > Plugins > Academic Transcript.
 
@@ -79,6 +83,40 @@ Moodle 4.5 creates the Local plugins category only for site administrators. On M
 6. Whoever receives the transcript can enter its code on the verify page.
 
 An Official transcript can't be issued while a course the student is taking now has no course code, no hours, no term, or an hour type that doesn't match the student's program. The student's page lists what to fix.
+
+## Official transcript requests
+
+A student opens My transcript and fills in the request form: how to send it, who it goes to, and when. The registrar then opens Transcript requests, selects Issue, and sends the PDF the way the student asked. The plugin doesn't send it. Reissue makes a new copy with a new verification code.
+
+Set the fees under Transcript settings > Official transcript fees. They default to $5 for email and $10 for mail or pick up, and 0 means free. With Student Records billing on, the fee goes on the student's account there. Otherwise the fee is only recorded on the request, and the school collects it another way. The student sees which of the two applies.
+
+To cancel a request that is pending, waiting or on hold, open "Cancel request" on the queue. A reason is optional, and it goes in the activity log. A cancelled request keeps its fee on the student's account, and the queue says so before you confirm.
+
+## With Student Records
+
+Install [Student Records](../studentrecords/README.md), then set Transcript settings > Source of the transcript to Student Records. The default is this plugin's own data, and nothing changes until you pick Student Records.
+
+For each student with a Student Records file:
+
+- The transcript reads the legal name, student ID, date of birth, program, admit term, status, terms, courses, final grades, withdrawals (W), courses in progress (IP), transfer credit and the conferred award from there, read only.
+- "Post final grades" also saves the grade on the student's registration. The letter comes from the grading scale in Student Records. Posting is blocked after the term's grade freeze date, and when the Registrar already set the grade.
+- "Request change" on a posted grade sends a grade change request to the Registrar in Student Records.
+- A hold in Student Records stops every way of issuing an Official transcript until it is released: Issue and Reissue on the queue, and the form on the student's transcript page.
+- A request can wait for this term's grades or for the degree.
+
+A student without a Student Records file keeps the transcript from this plugin's own data. Official transcripts already issued keep their frozen copy.
+
+Grades posted before you pick Student Records stay in this plugin and aren't read from there. A student's transcript lists each one as a problem, and it stops Official transcripts for that student until the Registrar enters the grade in Student Records. So enter those grades first, or pick Student Records before grades are posted.
+
+A course that runs again needs a new registration for each student. Without one, posting stops with a message rather than replacing the finished attempt.
+
+GPAs, hours earned and repeats are still worked out here, with this plugin's grading scale and marks. Student Records leaves out the same repeated attempts as this plugin, because it asks this plugin's calculator. Keep the scale and marks in step with those in Student Records. Two things can still differ: a program's minimum passing grade in Student Records can keep a course's hours from being earned there while the transcript counts them, and transfer credit marked "in GPA" counts in Student Records but not here. A grade from Student Records that isn't on this plugin's scale or marks has no points and earns no hours, so it is listed as a problem, and it stops Official transcripts for that student until you add it.
+
+## Transcripts from older builds
+
+Builds from before the first public release stored issued transcripts in older layouts. The upgrade keeps them, and their verification codes still work. A copy that has terms downloads in today's layout. The oldest copies have no terms, so they can't be drawn again: Download says so, and you can issue a new Official transcript instead.
+
+Those builds also have two more columns on the student table, `program` and `admissiondate`. The upgrade drops each one only when it holds nothing else: a program name with no linked program, or an admission date, keeps its column.
 
 ## Roles and capabilities
 
@@ -127,7 +165,7 @@ sudo -u www-data php public/local/academictranscript/cli/set_course_fields.php \
 
 ## Uninstall
 
-Uninstalling deletes the plugin's data: the grading scale, marks, programs, catalog, terms, student details, transcript codes and notes, transfer credit, posted grades, change requests, issued Official transcripts, the activity log, drafts, the settings and the uploaded files. Verification codes printed on Official transcripts stop working after that. Back up what you need first.
+Uninstalling deletes the plugin's data: the grading scale, marks, programs, catalog, terms, student details, transcript codes and notes, transfer credit, posted grades, change requests, issued Official transcripts, transcript requests, the activity log, drafts, the settings and the uploaded files. Verification codes printed on Official transcripts stop working after that. Back up what you need first.
 
 1. Go to Site administration > Plugins > Plugins overview. Find Academic Transcript under Local plugins and select Uninstall.
 2. Confirm. Moodle deletes the plugin's data.
@@ -151,7 +189,7 @@ If you install the plugin again later, it finds the three kept fields by their s
 
 ## Privacy
 
-The plugin supports Moodle's privacy tools (Site administration > Users > Privacy and policies > Data requests). The student is the data subject. An export or a deletion covers the student's details, codes, transfer credit, posted grades and their change requests, issued Official transcripts, and the log entries about the student. Drafts belong to the admin who uploaded the document.
+The plugin supports Moodle's privacy tools (Site administration > Users > Privacy and policies > Data requests). The student is the data subject. An export or a deletion covers the student's details, codes, transfer credit, posted grades and their change requests, issued Official transcripts, requests for Official transcripts, and the log entries about the student. A request can hold the name, email or address of whoever it goes to, and those go with it. What a student has in Student Records is that plugin's to export or delete. Drafts belong to the admin who uploaded the document.
 
 Staff ids on student records, such as who posted or approved a grade, are declared in the privacy metadata, but they are not exported or deleted for the staff member. Exported log entries hide other people's IP addresses, so a user gets an IP address only for what that user did.
 
@@ -161,9 +199,9 @@ The plugin makes no network calls of its own. In the setup wizard, Moodle sends 
 
 ## Third-party code
 
-- smalot/pdfparser 2.13.1 (LGPL-3.0, upstream https://github.com/smalot/pdfparser) reads text from PDF files in the setup wizard. It is in `lib/pdfparser/`: the upstream `src/` folder and `LICENSE.txt`, unchanged. `classes/local/import/document_text.php` loads it with its own autoloader, so there is no Composer step.
-- Source Sans 3 (3.052) and Source Serif 4 (4.005), under the SIL Open Font License 1.1 (upstream https://github.com/adobe-fonts). The PDF transcripts embed these fonts. They are in `fonts/` as TCPDF font files, with the license texts `fonts/OFL-SourceSans3.txt` and `fonts/OFL-SourceSerif4.txt`.
-- TCPDF, which writes the PDF files, comes with Moodle.
+- smalot/pdfparser 2.13.1 (LGPL-3.0, upstream https://github.com/smalot/pdfparser) reads text from PDF files in the setup wizard. It is in `lib/pdfparser/`: the upstream `src/` folder and `LICENSE.txt`, unchanged, and `GPL-3.0.txt`, the GNU GPL text that the LGPL asks for. `classes/local/import/document_text.php` loads it with its own autoloader, so there is no Composer step.
+- Source Sans 3 (3.052) and Source Serif 4 (4.004), under the SIL Open Font License 1.1 (upstream https://github.com/adobe-fonts). The PDF transcripts embed these fonts. They are in `fonts/` as TCPDF font files, with the license texts `fonts/OFL-SourceSans3.txt` and `fonts/OFL-SourceSerif4.txt`.
+- TCPDF, which writes the PDF files and the QR code on Official transcripts, comes with Moodle.
 
 Both bundled items are declared in `thirdpartylibs.xml`. Each has a `readme_moodle.txt` that says where it came from and how to update it: `lib/pdfparser/readme_moodle.txt` and `fonts/readme_moodle.txt`.
 
@@ -173,6 +211,6 @@ Report bugs and ask questions on the [issue tracker](https://github.com/Clouve/m
 
 ## License
 
-Academic Transcript is free software. You can redistribute it and change it under the terms of the GNU General Public License, version 3 or later. The full text is in the `LICENSE` file in the plugin folder, and at https://www.gnu.org/licenses/gpl-3.0.html. Copyright 2026 Clouve Inc.
+Academic Transcript is under the MIT License. Anyone can use, change and share it. The full text is in the `LICENSE` file in the plugin folder. Copyright 2026 Clouve Inc.
 
 The bundled libraries and fonts keep their own licenses (see "Third-party code").

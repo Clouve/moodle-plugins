@@ -81,7 +81,7 @@ case ${1:-} in
       if [ -n "$seen" ] && [ -z "$step" ]; then step=$arg; fi
       if [ "$arg" = moodle-plugin-ci ]; then seen=1; fi
     done
-    if [ "$step" = "${STUB_FAIL:-}" ]; then
+    if [ -n "$step" ] && [ "$step" = "${STUB_FAIL:-}" ]; then
       echo "stub: $step fails" >&2
       exit 1
     fi
@@ -256,6 +256,7 @@ assert_contains "installs Moodle 5.3" "$(exec_line install)" "--branch MOODLE_50
 assert_contains "on PostgreSQL" "$(exec_line install | head -n 1)" "--db-type pgsql --db-host"
 assert_lacks "and initialises PHPUnit, because phpunit is a step" "$(calls)" "--no-init"
 assert_contains "phpcs fails on warnings" "$(exec_line phpcs | head -n 1)" "phpcs --max-warnings 0"
+assert_contains "phpcs doesn't ask for Moodle's GPL header" "$(exec_line phpcs | head -n 1)" "--exclude moodle.Files.BoilerplateComment"
 assert_contains "phpdoc fails on warnings" "$(exec_line phpdoc | head -n 1)" "phpdoc --max-warnings 0"
 assert_contains "grunt fails on lint warnings" "$(exec_line grunt | head -n 1)" "grunt --max-lint-warnings 0"
 assert_contains "phpunit fails on warnings" "$(exec_line phpunit | head -n 1)" "phpunit --fail-on-warning"
@@ -330,6 +331,18 @@ $(printf 'PASS %s\n' phplint phpcs phpdoc validate savepoints mustache grunt php
 All checks passed." "$OUT"
 
 section "check: choosing steps"
+
+fresh_state
+fresh_state
+run "$check" --together --plugin local/demo phplint
+assert_status "--together exits 0" 0
+assert_contains "--together copies the other plugins" "$(calls)" "/work/extra/admin_tool_other"
+assert_contains "--together installs them" "$(calls)" "--extra-plugins ./extra"
+assert_eq "--together leaves out the plugin being checked" "" "$(calls | grep '/work/extra/local_demo' || true)"
+
+fresh_state
+run "$check" --plugin local/demo phplint
+assert_eq "without --together no other plugin is installed" "" "$(calls | grep -e '--extra-plugins' || true)"
 
 fresh_state
 run "$check" --plugin local/demo phpcs phplint

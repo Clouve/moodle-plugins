@@ -29,7 +29,7 @@ jobs:
 
   # moodle-plugin-ci, as in its gha.dist.yml, for each plugin and each environment.
   test:
-    name: ${{ matrix.plugin }} on Moodle ${{ matrix.env.moodle }}, PHP ${{ matrix.env.php }}, ${{ matrix.env.database }}
+    name: ${{ matrix.plugin }} on Moodle ${{ matrix.env.moodle }}, PHP ${{ matrix.env.php }}, ${{ matrix.env.database }}${{ matrix.env.together && ', with the other plugins' || '' }}
     needs: plugins
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -78,6 +78,9 @@ jobs:
           - { moodle: MOODLE_502_STABLE, php: '8.3', database: mysqli }
           - { moodle: MOODLE_503_STABLE, php: '8.3', database: pgsql }
           - { moodle: MOODLE_503_STABLE, php: '8.4', database: mysqli }
+          # The same checks with every plugin of this repo installed, for the tests that need a sibling plugin.
+          - { moodle: MOODLE_405_STABLE, php: '8.1', database: mysqli, together: true }
+          - { moodle: MOODLE_503_STABLE, php: '8.3', database: pgsql, together: true }
 
     steps:
       - name: Check out repository code
@@ -103,8 +106,20 @@ jobs:
           sudo locale-gen en_AU.UTF-8
           echo "NVM_DIR=$HOME/.nvm" >> "$GITHUB_ENV"
 
+      - name: Copy the other plugins
+        if: ${{ matrix.env.together }}
+        env:
+          THIS_PLUGIN: ${{ matrix.plugin }}
+        run: |
+          mkdir extra
+          for other in $(plugin/bin/list-plugins); do
+            if [ "$other" != "$THIS_PLUGIN" ]; then
+              cp -r "plugin/$other" "extra/${other//\//_}"
+            fi
+          done
+
       - name: Install moodle-plugin-ci
-        run: moodle-plugin-ci install --plugin ./plugin/${{ matrix.plugin }} --db-host=127.0.0.1
+        run: moodle-plugin-ci install --plugin ./plugin/${{ matrix.plugin }} --db-host=127.0.0.1 ${{ matrix.env.together && '--extra-plugins ./extra' || '' }}
         env:
           DB: ${{ matrix.env.database }}
           MOODLE_BRANCH: ${{ matrix.env.moodle }}
@@ -120,7 +135,7 @@ jobs:
 
       - name: Moodle Code Checker
         if: ${{ !cancelled() }}
-        run: moodle-plugin-ci phpcs --max-warnings 0
+        run: moodle-plugin-ci phpcs --max-warnings 0 --exclude moodle.Files.BoilerplateComment
 
       - name: Moodle PHPDoc Checker
         if: ${{ !cancelled() }}

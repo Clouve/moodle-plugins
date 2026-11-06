@@ -1,18 +1,4 @@
 <?php
-// This file is part of Moodle - https://moodle.org/
-//
-// Moodle is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// Moodle is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 namespace local_academictranscript\privacy;
 
@@ -25,6 +11,7 @@ use core_privacy\local\request\writer;
 use local_academictranscript\local\import\drafts;
 use local_academictranscript\local\logger;
 use local_academictranscript\local\posting;
+use local_academictranscript\local\requests;
 use local_academictranscript\local\scale;
 use local_academictranscript\local\transcript;
 
@@ -47,7 +34,7 @@ use local_academictranscript\local\transcript;
  * @package    local_academictranscript
  * @category   test
  * @copyright  2026 Clouve Inc.
- * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ * @license    https://opensource.org/license/mit MIT
  * @covers     \local_academictranscript\privacy\provider
  */
 final class provider_test extends \core_privacy\tests\provider_testcase {
@@ -81,6 +68,10 @@ final class provider_test extends \core_privacy\tests\provider_testcase {
         'local_academictranscript_issue' => ['privacy:metadata:issue', [
             'userid', 'verifycode', 'issuedby', 'snapshot', 'recipient', 'transcriptno', 'timecreated',
         ]],
+        'local_academictranscript_request' => ['privacy:metadata:request', [
+            'userid', 'delivery', 'recipient', 'email', 'address', 'timing', 'fee', 'charged', 'status', 'issueid', 'issuedby',
+            'timeissued', 'note', 'timecreated', 'timemodified',
+        ]],
         'local_academictranscript_log' => ['privacy:metadata:log', [
             'action', 'userid', 'studentid', 'issueid', 'ip', 'info', 'timecreated',
         ]],
@@ -109,9 +100,10 @@ final class provider_test extends \core_privacy\tests\provider_testcase {
         'local_academictranscript_student' => ['id'],
         'local_academictranscript_code' => ['id'],
         'local_academictranscript_transfer' => ['id'],
-        'local_academictranscript_posted' => ['id', 'unittype'],
+        'local_academictranscript_posted' => ['id', 'unittype', 'srregid'],
         'local_academictranscript_change' => ['id'],
         'local_academictranscript_issue' => ['id'],
+        'local_academictranscript_request' => ['id'],
         'local_academictranscript_log' => ['id'],
         'local_academictranscript_draft' => ['id', 'itemtype', 'data', 'source', 'sourcefileid', 'quotefound', 'status'],
         'local_academictranscript_grade' => [
@@ -141,14 +133,14 @@ final class provider_test extends \core_privacy\tests\provider_testcase {
     }
 
     /**
-     * The metadata has one table item for each of the thirteen tables, with the description key of the table. The
+     * The metadata has one table item for each of the fourteen tables, with the description key of the table. The
      * recipient of a transcript and the staff who acted on a record are declared, and so is the admin who last changed
      * a row of the school's settings, so the registry shows every kind of person who appears in it.
      */
     public function test_get_metadata_declares_every_table(): void {
         $collection = provider::get_metadata(new collection(self::COMPONENT));
 
-        $this->assertCount(13, $collection->get_collection());
+        $this->assertCount(14, $collection->get_collection());
         $items = $this->metadata();
         $this->assertEqualsCanonicalizing(array_keys(self::METADATA), array_keys($items));
         foreach (self::METADATA as $table => [$summary]) {
@@ -287,6 +279,7 @@ final class provider_test extends \core_privacy\tests\provider_testcase {
             'transfer credit' => ['transfer'],
             'posted grade' => ['posted'],
             'issued transcript' => ['issue'],
+            'request for an Official transcript' => ['request'],
             'draft from an uploaded document' => ['draft'],
             'log entry about the student' => ['log'],
             'failed verification made while logged in' => ['failedverification'],
@@ -435,7 +428,7 @@ final class provider_test extends \core_privacy\tests\provider_testcase {
     }
 
     /**
-     * The export holds the rows of each of the eight tables of student records that belong to the student, and no row
+     * The export holds the rows of each of the nine tables of student records that belong to the student, and no row
      * of another student. The school's settings are not in it.
      */
     public function test_export_includes_the_rows_of_every_table(): void {
@@ -834,6 +827,8 @@ final class provider_test extends \core_privacy\tests\provider_testcase {
         $rows['posted'] = [$posted->id];
         $rows['change'] = [posting::request_change($posted->id, 'B', 'Regraded', self::CHANGE_REASON)];
         $rows['issue'] = [transcript::issue($user->id, 'Valley College Registrar')->id];
+        $rows['request'] = [requests::create($user->id, ['delivery' => 'mail', 'recipient' => 'Valley College Registrar',
+            'address' => '1 Campus Way', 'timing' => 'now'])];
         $rows['log'] = $DB->get_fieldset_select('local_academictranscript_log', 'id', 'studentid = ?', [$user->id]);
 
         return [$user, array_map([$this, 'sorted_ids'], $rows)];
@@ -842,7 +837,8 @@ final class provider_test extends \core_privacy\tests\provider_testcase {
     /**
      * Store a row in one table for a user, in the way that the plugin would.
      *
-     * @param string $table The table, without the plugin prefix: student, code, transfer, posted, issue, draft or log, or
+     * @param string $table The table, without the plugin prefix: student, code, transfer, posted, issue, request, draft or
+     *      log, or
      *      failedverification for a log entry about no student that the user made while logged in
      * @param \stdClass $user The user the row is about (for a draft, the user who uploads the document)
      */
@@ -870,6 +866,11 @@ final class provider_test extends \core_privacy\tests\provider_testcase {
                 transcript::issue($user->id, 'Valley College Registrar');
                 // Issuing also writes a log entry about the student, and that alone gives a context. Empty the log, so
                 // that the issued transcript is the only row.
+                $DB->delete_records('local_academictranscript_log');
+                break;
+            case 'request':
+                requests::create($user->id, ['delivery' => 'pickup', 'recipient' => 'Myself', 'timing' => 'now']);
+                // Requesting also writes a log entry about the student. Empty the log, so that the request is the only row.
                 $DB->delete_records('local_academictranscript_log');
                 break;
             case 'draft':

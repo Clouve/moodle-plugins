@@ -1,30 +1,17 @@
 <?php
-// This file is part of Moodle - https://moodle.org/
-//
-// Moodle is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// Moodle is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
  * Request a change to a posted grade (teachers of the course, admins). An admin must approve it.
  *
  * @package    local_academictranscript
  * @copyright  2026 Clouve Inc.
- * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ * @license    https://opensource.org/license/mit MIT
  */
 
 require_once(__DIR__ . '/../../config.php');
 
 use local_academictranscript\local\posting;
+use local_academictranscript\local\srpost;
 
 $id = required_param('id', PARAM_INT);
 $posted = $DB->get_record('local_academictranscript_posted', ['id' => $id], '*', MUST_EXIST);
@@ -42,25 +29,52 @@ $PAGE->set_heading(format_string($course->fullname, true, ['context' => $context
 
 $student = core_user::get_user($posted->userid, '*', MUST_EXIST);
 $term = $DB->get_field('local_academictranscript_term', 'name', ['id' => $posted->termid]);
-$current = $posted->grade . ' — ' . fullname($student) . ' — ' . $posted->coursecode . ' — ' . $term;
-$form = new \local_academictranscript\form\change_request($url, ['current' => $current]);
-$form->set_data(['id' => $id, 'newgrade' => $posted->grade, 'newnote' => $posted->note]);
+// With Student Records as the transcript source, the change is a grade change request there, and the Registrar approves it.
+// The request goes to the registration that got this grade: a course can run more than once.
+$sr = srpost::posted_target($posted);
+// A row with no registration behind it is not on that student's transcript, so a change here would never print.
+$unlinked = !$sr && srpost::has_file((int)$posted->userid);
+$grade = $sr ? $sr['grade'] : $posted->grade;
+$current = $grade . ' — ' . fullname($student) . ' — ' . $posted->coursecode . ' — ' . $term;
+$form = new \local_academictranscript\form\change_request($url, ['current' => $current,
+    'letters' => $sr ? srpost::letters() : null]);
+$form->set_data(['id' => $id, 'newgrade' => $grade, 'newnote' => $posted->note]);
 
-$pending = $DB->get_record('local_academictranscript_change', ['postedid' => $id, 'status' => 'pending']);
+if ($sr) {
+    $pending = srpost::change_pending($sr['regid']);
+} else {
+    $pending = $DB->record_exists('local_academictranscript_change', ['postedid' => $id, 'status' => 'pending']);
+}
 if ($form->is_cancelled()) {
     redirect($back);
-} else if (!$pending && ($data = $form->get_data())) {
+} else if (!$pending && !$unlinked && ($data = $form->get_data())) {
+    if ($sr) {
+        try {
+            srpost::request_change($sr['regid'], $data->newgrade, $data->reason);
+        } catch (moodle_exception $e) {
+            redirect($back, s($e->getMessage()), null, \core\output\notification::NOTIFY_WARNING);
+        }
+        redirect(
+            $back,
+            get_string('changerequestedsr', 'local_academictranscript'),
+            null,
+            \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
     posting::request_change($id, $data->newgrade, (string)$data->newnote, $data->reason);
     redirect($back, get_string('changerequested', 'local_academictranscript'), null, \core\output\notification::NOTIFY_SUCCESS);
 }
 
 echo $OUTPUT->header();
 echo $OUTPUT->heading(get_string('requestchange', 'local_academictranscript'));
-if ($pending) {
+if ($unlinked) {
+    echo $OUTPUT->notification(get_string('changeunlinked', 'local_academictranscript'), 'warning');
+    echo $OUTPUT->continue_button($back);
+} else if ($pending) {
     echo $OUTPUT->notification(get_string('changepending', 'local_academictranscript'), 'info');
     echo $OUTPUT->continue_button($back);
 } else {
-    echo html_writer::tag('p', get_string('changeintro', 'local_academictranscript'));
+    echo html_writer::tag('p', get_string($sr ? 'changeintrosr' : 'changeintro', 'local_academictranscript'));
     $form->display();
 }
 

@@ -18,11 +18,10 @@
     <description>Fonts embedded in transcript PDFs (converted to TCPDF format).</description>
     <license>OFL</license>
     <licenseversion>1.1</licenseversion>
-    <version>3.052 / 4.005</version>
+    <version>3.052 / 4.004</version>
     <repository>https://github.com/adobe-fonts</repository>
     <copyrights>
-      <copyright>Adobe (Source Sans 3)</copyright>
-      <copyright>The Source Serif 4 Project Authors</copyright>
+      <copyright>Adobe</copyright>
     </copyrights>
   </library>
 </libraries>

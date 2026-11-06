@@ -22,7 +22,7 @@ Run the checks before you open a pull request:
 bin/check --plugin local/academictranscript
 ```
 
-That runs every step on Moodle 5.3, PHP 8.3 and PostgreSQL. If you can, run another combination too, for example `--moodle 4.5 --php 8.1 --db mysqli`, because code that works on Moodle 5.3 can break on 4.5. The [README](README.md) lists the options. If you change something in `bin/`, run `tests/run.sh` as well.
+That runs every step on Moodle 5.3, PHP 8.3 and PostgreSQL. If you can, run another combination too, for example `--moodle 4.5 --php 8.1 --db mysqli`, because code that works on Moodle 5.3 can break on 4.5. If you change how two plugins work together, add `--together`. The [README](README.md) lists the options. If you change something in `bin/`, run `tests/run.sh` as well.
 
 `bin/check` runs PHPUnit as root, so it shows one skipped test: the uninstall test for a signing-key folder that can't be deleted needs a user who isn't root. GitHub Actions runs it.
 
@@ -37,15 +37,18 @@ GitHub Actions runs the checks on every push and pull request, on these combinat
 | 5.3 | 8.3 | PostgreSQL 17 |
 | 5.3 | 8.4 | MySQL 8.4 |
 
+Two more combinations run the same checks with the other plugins of the repo installed: Moodle 4.5 with PHP 8.1 and MySQL 8.4, and Moodle 5.3 with PHP 8.3 and PostgreSQL 17.
+
 The steps are PHP lint, the PHP Mess Detector (it only informs), `phpcs` and `phpdoc` with no warnings allowed, validate, savepoints, mustache, grunt, `phpunit` with warnings counted as failures, and Behat (it passes when a plugin has no features). A separate job runs `tests/run.sh`, builds the ZIP of every plugin, and keeps the ZIPs for 14 days as a build artifact. A pull request is ready when every job is green.
 
-Every plugin runs on the same six combinations. A plugin that supports other versions needs a change to `.github/workflows/ci.yml`.
+Every plugin runs on the same combinations. A plugin that supports other versions needs a change to `.github/workflows/ci.yml`.
 
 ## Coding rules
 
 - Write PHP 8.1 syntax only. Moodle 4.5 runs on PHP 8.1.
 - Follow Moodle's coding style. `phpcs` (moodle-cs) and `phpdoc` must pass with no warnings.
-- Start every PHP file with the standard Moodle GPL header and a docblock with `@package`, `@copyright` and `@license`. Copy them from an existing file, such as `local/academictranscript/version.php`.
+- Start every PHP file with a docblock that has `@package`, `@copyright` and `@license`. Copy them from an existing file in the plugin. Plugins under the MIT License have no Moodle GPL header, so `bin/check` and CI leave out the `moodle.Files.BoilerplateComment` check. Don't run `phpcbf` on them: it writes the GPL header in.
+- A plugin that copies or adapts a substantial part of Moodle's code is under the GNU GPL as a whole, as the Student Records theme is. Keep the GPL header and the author lines of what you copy, and say what you changed.
 - Add your own `@copyright` line next to Clouve's in a file that you write or change substantially, as Moodle core does. For example, put a second line `@copyright  2027 Jane Doe <jane@example.com>` under `@copyright  2026 Clouve Inc.`. Leave the `@license` line as it is.
 - Put every text a person reads in a language string, including date formats. Keep the strings in `lang/en/` sorted by key. moodle-cs checks that.
 - Write docs and language strings in plain words and short sentences, in sentence case. Leave out em and en dashes, curly quotes and exclamation marks.
@@ -53,6 +56,7 @@ Every plugin runs on the same six combinations. A plugin that supports other ver
 - Store the names of courses, programs and marks as plain text, and escape them once, where they are shown. In Academic Transcript, `local\text::plain()` makes the plain text.
 - Don't rename a component, a page, a table, a capability, a setting or a course field short name. Sites keep data under those names, and the address of the verify page is printed on every Official transcript.
 - Keep bundled third-party code as upstream ships it. Declare it in `thirdpartylibs.xml` and describe it in a `readme_moodle.txt` next to it.
+- A plugin stays optional for the others. Check that a sibling is installed before you call it, and keep the plugin working without it.
 
 ## Tests
 
@@ -67,6 +71,7 @@ Tests are PHPUnit tests in the plugin's `tests/` folder. They run on PHPUnit 9.6
 - Extend `\basic_testcase` when the test uses no database, and `\advanced_testcase` when it does. A database test calls `resetAfterTest()` in `setUp()`.
 - Call `scale::reset_cache()` in `setUp()` of every test whose code reads the grading scale or the marks. The `scale` class caches the rows for the request, and that cache outlives the database reset of a test.
 - The data generator in `tests/generator/lib.php` creates terms, programs, catalog courses, student records and posted grades.
+- A test that needs a sibling plugin calls `markTestSkipped()` when the plugin isn't installed. The combinations with the other plugins installed run it.
 
 This is the shape of a test file:
 
@@ -80,7 +85,7 @@ namespace local_academictranscript\local;
  * @package    local_academictranscript
  * @category   test
  * @copyright  2026 Clouve Inc.
- * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ * @license    https://opensource.org/license/mit MIT
  * @covers     \local_academictranscript\local\calculator
  */
 final class calculator_test extends \basic_testcase {
@@ -125,7 +130,7 @@ When a plugin starts to support other Moodle versions, change `$plugin->requires
 1. Put the plugin at its Moodle path, for example `blocks/<name>` or `admin/tool/<name>`. The folder is named after the plugin: `foo` for `block_foo`. Use only letters, digits and `_ . -` in folder names.
 2. Give it a `version.php` that sets `$plugin->component`, `$plugin->version`, `$plugin->release`, `$plugin->requires`, `$plugin->supported` and `$plugin->maturity`. `bin/list-plugins` finds a plugin by that file.
 3. Add a `README.md` and a `CHANGES.md` with a section headed `## <release>`. The release notes come from that section.
-4. Copy the `LICENSE` file of the repo into the plugin folder. The install ZIP holds only that folder, so the license text has to be in it.
+4. Copy the `LICENSE` file of the repo into the plugin folder, or the GNU GPL text if the plugin adapts Moodle's code. The install ZIP holds only that folder, so the license text has to be in it.
 5. If the plugin bundles third-party code, declare it in `thirdpartylibs.xml` and add a `readme_moodle.txt` next to the code.
 6. Add a row to the plugin table in the [README](README.md).
 7. Run `bin/check --plugin <path>`.
@@ -138,4 +143,4 @@ Only the maintainers publish releases. A release is a tag named `<component>-v<r
 
 ## License of your contribution
 
-The code in this repo is under the GNU General Public License, version 3 or later. By sending a pull request you agree that your change is released under the same license.
+Each plugin says its license in its `LICENSE` file. By sending a pull request you agree that your change is released under the license of the plugin you change.

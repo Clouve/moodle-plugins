@@ -1,25 +1,11 @@
 <?php
-// This file is part of Moodle - https://moodle.org/
-//
-// Moodle is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// Moodle is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
  * English strings.
  *
  * @package    local_academictranscript
  * @copyright  2026 Clouve Inc.
- * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ * @license    https://opensource.org/license/mit MIT
  */
 
 defined('MOODLE_INTERNAL') || die();
@@ -77,12 +63,15 @@ $string['change'] = 'Change';
 $string['changeapproved'] = 'Change approved. The transcript now shows the new grade.';
 $string['changehistory'] = 'Change history';
 $string['changeintro'] = 'Posted grades are locked. Choose the new grade and give a reason. An admin must approve the change before it shows on the transcript.';
+$string['changeintrosr'] = 'Posted grades are locked. Choose the new grade and give a reason. The request goes to the Registrar in Student Records, who must approve it before it shows on the transcript.';
 $string['changepending'] = 'A change request for this grade is already waiting for approval.';
 $string['changerejected'] = 'Change rejected. The posted grade is unchanged.';
 $string['changerequested'] = 'Change requested. An admin must approve it.';
+$string['changerequestedsr'] = 'Change requested. The Registrar must approve it in Student Records.';
 $string['changestatus_approved'] = 'Approved';
 $string['changestatus_pending'] = 'Waiting for approval';
 $string['changestatus_rejected'] = 'Rejected';
+$string['changeunlinked'] = 'This grade is not linked to a registration in Student Records, so a change here would not reach the transcript. Ask the Registrar to change it in Student Records.';
 $string['check_drafts'] = 'No drafts are waiting for review';
 $string['check_marks'] = 'Marks are set';
 $string['check_programs'] = 'At least one program is set';
@@ -180,6 +169,9 @@ $string['err_points'] = 'Grade {$a}: grade points must be between 0 and 100.';
 $string['err_range'] = 'Grade {$a}: the minimum must not be above the maximum (0 to 1000).';
 $string['event_code_updated'] = 'Transcript code updated';
 $string['event_official_issued'] = 'Official transcript issued';
+$string['fee_email'] = 'Fee: official transcript by email (PDF)';
+$string['fee_mail'] = 'Fee: official transcript by mail (paper)';
+$string['fee_pickup'] = 'Fee: official transcript picked up';
 $string['field_code'] = 'Code';
 $string['field_credential'] = 'Credential';
 $string['field_description'] = 'Description';
@@ -221,8 +213,10 @@ $string['issuedby'] = 'Issued by';
 $string['issuedforstudent'] = 'Official transcripts issued';
 $string['issuedlog'] = 'Issued Official transcripts';
 $string['issuedok'] = 'Official transcript {$a->no} issued. Verification code: {$a->code}';
+$string['issuedoldlayout'] = 'This transcript was issued in an older layout, so it cannot be downloaded again. Its verification code still works. To give someone a new copy, issue a new Official transcript.';
 $string['issuedto'] = 'Issued To';
 $string['issueofficial'] = 'Issue Official transcript (PDF)';
+$string['issueonhold'] = 'An Official transcript cannot be issued while the student has a hold: {$a}.';
 $string['itemtype_course'] = 'Courses';
 $string['itemtype_grade'] = 'Grading scale';
 $string['itemtype_mark'] = 'Marks';
@@ -258,6 +252,9 @@ $string['logaction_change_request'] = 'Grade change requested';
 $string['logaction_issue'] = 'Official transcript issued';
 $string['logaction_post'] = 'Final grade posted';
 $string['logaction_redownload'] = 'Official transcript downloaded again';
+$string['logaction_request'] = 'Official transcript requested';
+$string['logaction_request_cancelled'] = 'Official transcript request cancelled';
+$string['logaction_request_issued'] = 'Official transcript request issued';
 $string['logaction_termoverride'] = 'Course term changed for student';
 $string['logaction_transfer'] = 'Transfer credit saved';
 $string['logaction_unofficial'] = 'Unofficial transcript downloaded';
@@ -290,6 +287,8 @@ $string['markssaved'] = 'Marks saved.';
 $string['missingcode'] = 'Missing course code';
 $string['missinghours'] = 'Missing hours';
 $string['missingterm'] = 'Missing term';
+$string['mytranscript_preview'] = 'Unofficial transcript preview (scrolls)';
+$string['mytranscript_title'] = 'My transcript';
 $string['newgrade'] = 'New grade';
 $string['nextstep'] = 'Next step';
 $string['noaiprovider'] = 'No AI provider is set up on this site, so documents cannot be read automatically. Enter the data by hand or with the CSV templates below, or <a href="{$a}">set up an AI provider</a> (Site administration > AI > AI providers) and come back.';
@@ -307,6 +306,7 @@ $string['notloggedin'] = '(not logged in)';
 $string['notposted'] = 'Not posted';
 $string['notsigned'] = 'Digital signature not available on this server.';
 $string['notverifiable'] = 'Not verifiable (student copy)';
+$string['nowinsr'] = 'Now {$a} in Student Records.';
 $string['pageof'] = 'Page {$a->page} of {$a->pages}';
 $string['pagesize'] = 'Page size';
 $string['pagesize_a4'] = 'A4';
@@ -323,6 +323,7 @@ $string['postedcount'] = 'Final grades posted: {$a}';
 $string['postedon'] = 'Posted: {$a->grade} on {$a->date}.';
 $string['postgrades'] = 'Post final grades';
 $string['postintro'] = 'Posting copies each student\'s final grade (the transcript code if one is set, otherwise the letter from the course total) to the transcript for the student\'s term, and locks the student\'s course total in the gradebook. Until then the course shows as IP (In Progress).';
+$string['postintrosr'] = 'Posting saves each student\'s final grade in Student Records (the student\'s registration for this course), using the school\'s grading scale: the letter from the course total, or the transcript code if one is set and it is on the scale. The grade then shows on the transcript, and the student\'s course total is locked in the gradebook. Posting is not possible after the term\'s grade freeze date, and a final grade the Registrar already set is never replaced. Until then the course shows as IP (In Progress).';
 $string['postselected'] = 'Post selected';
 $string['preset_a'] = 'Excellent';
 $string['preset_b'] = 'Good';
@@ -379,7 +380,18 @@ $string['privacy:metadata:postedid'] = 'The posted grade the request is about.';
 $string['privacy:metadata:programid'] = 'The program the student is in.';
 $string['privacy:metadata:qualification'] = 'Qualification awarded.';
 $string['privacy:metadata:recipient'] = 'Who the transcript was issued to.';
+$string['privacy:metadata:request'] = 'Requests for Official transcripts.';
+$string['privacy:metadata:requestaddress'] = 'The mailing address the transcript goes to.';
+$string['privacy:metadata:requestcharged'] = 'Whether the fee went on the student\'s account.';
+$string['privacy:metadata:requestdelivery'] = 'How the transcript goes out: by email, by mail or for pick up.';
 $string['privacy:metadata:requestedby'] = 'The user who asked for the change. Requests are exported and deleted for the student, not for this user.';
+$string['privacy:metadata:requestemail'] = 'The email address the transcript goes to.';
+$string['privacy:metadata:requestfee'] = 'The fee of the request.';
+$string['privacy:metadata:requestrecipient'] = 'The person or office the transcript goes to.';
+$string['privacy:metadata:requeststatus'] = 'Whether the request is pending, issued or cancelled.';
+$string['privacy:metadata:requesttime'] = 'When the request was made.';
+$string['privacy:metadata:requesttimeissued'] = 'When the transcript was issued for the request.';
+$string['privacy:metadata:requesttiming'] = 'When the student asked for the transcript to go out.';
 $string['privacy:metadata:settings'] = 'Settings of the school, such as the grading scale, marks, programs, course catalog and terms. Each row records the admin who last changed it, and is not exported or deleted for that admin.';
 $string['privacy:metadata:snapshot'] = 'The transcript content as issued.';
 $string['privacy:metadata:student'] = 'Student details printed on the transcript.';
@@ -399,15 +411,41 @@ $string['privacy:metadata:verifycode'] = 'Verification code of the issued transc
 $string['problem_nocode'] = 'Course "{$a}" has no course code.';
 $string['problem_nohours'] = 'Course "{$a}" has no hours.';
 $string['problem_noterm'] = 'Course "{$a}" has no term.';
+$string['problem_postednotinsr'] = 'The grade {$a->grade} posted for {$a->course} is not in Student Records, so the transcript leaves it out. Ask the Registrar to enter it there.';
 $string['problem_unittype'] = 'Course "{$a->course}" uses {$a->unit}, which does not match the student\'s program.';
+$string['problem_unknowngrade'] = 'Grade {$a->grade} in {$a->course} is not on this plugin\'s grading scale or marks, so the transcript cannot count it. Add it on the Grading scale page or the Marks page.';
 $string['problemsheading'] = 'An Official transcript cannot be issued until these are fixed in the course settings (section "Transcript"):';
 $string['program'] = 'Program of Study';
 $string['program_help'] = 'Programs are set on the Programs page. The program decides whether the transcript shows credit hours or clock hours.';
 $string['programname'] = 'Program name';
 $string['programs'] = 'Programs';
 $string['programsintro'] = 'Each program uses credit hours (degree programs) or clock hours (non-degree programs). The student\'s program decides which unit the transcript shows.';
+$string['qr_scan'] = 'Scan to verify';
 $string['qualification'] = 'Qualification Awarded';
 $string['qualitypoints'] = 'Quality Pts';
+$string['queue_cancel'] = 'Cancel request';
+$string['queue_cancelfee'] = 'The {$a} fee stays on the student\'s account.';
+$string['queue_cancelled'] = 'Request cancelled.';
+$string['queue_cancelreason'] = 'Reason for the log (optional)';
+$string['queue_issue'] = 'Issue';
+$string['queue_issued'] = 'Transcript issued to {$a->name} for {$a->to}. Verification code {$a->code}. Download it from Recently issued to send it.';
+$string['queue_issuedmonth'] = 'Issued this month';
+$string['queue_issuedon'] = 'Issued';
+$string['queue_noissued'] = 'Nothing issued yet.';
+$string['queue_noonhold'] = 'No requests on hold.';
+$string['queue_nopending'] = 'No pending requests.';
+$string['queue_note'] = 'Issuing makes the official PDF with its verification code and QR code. Send it as the student asked (email, mail or pick up). Reissue makes a new copy with a new code.';
+$string['queue_onhold'] = 'On hold';
+$string['queue_pending'] = 'Pending';
+$string['queue_reason'] = 'Reason';
+$string['queue_recent'] = 'Recently issued';
+$string['queue_reissue'] = 'Reissue';
+$string['queue_student'] = 'Student';
+$string['queue_title'] = 'Transcript requests';
+$string['queue_type'] = 'Type';
+$string['queue_viewhold'] = 'View hold';
+$string['queue_waits_degree'] = 'Waits for the degree';
+$string['queue_waits_grades'] = 'Waits for grades';
 $string['quotefound'] = 'Found in the document';
 $string['quotenotfound'] = 'Quote not found: check carefully';
 $string['readcsv'] = 'Read CSV file';
@@ -431,6 +469,44 @@ $string['repeat_highest'] = 'Only the highest grade counts';
 $string['repeat_latest'] = 'Only the latest attempt counts';
 $string['repeatrule'] = 'Repeated courses';
 $string['repeatrule_desc'] = 'When a student takes a course with the same course code more than once, which attempts count in the GPA and hours earned. All attempts always stay on the transcript.';
+$string['req_address'] = 'Mailing address';
+$string['req_chargedesc'] = 'Official transcript ({$a})';
+$string['req_delivery_email'] = 'Email PDF';
+$string['req_delivery_mail'] = 'Mail paper';
+$string['req_delivery_pickup'] = 'Pick up';
+$string['req_email'] = 'Their email';
+$string['req_err_address'] = 'Enter the mailing address.';
+$string['req_err_delivery'] = 'Choose how to send it.';
+$string['req_err_email'] = 'Enter a valid email address.';
+$string['req_err_notpending'] = 'This request is not pending any more.';
+$string['req_err_notready'] = 'This request can\'t be issued yet. There is a hold, or it waits for grades or the degree.';
+$string['req_err_recipient'] = 'Enter who it goes to (a person or office).';
+$string['req_err_timing'] = 'Choose when to send it.';
+$string['req_feenote'] = 'The fee is added to your student account. Pay it on My account.';
+$string['req_feenote_nocharge'] = 'The registrar\'s office will tell you how to pay any fee.';
+$string['req_holds'] = 'You have a hold: {$a}. You can still order. The registrar sends it when the hold is released.';
+$string['req_how'] = 'How should we send it?';
+$string['req_mine'] = 'My requests';
+$string['req_money'] = '${$a}';
+$string['req_noholds'] = 'No holds. You can order now.';
+$string['req_none'] = 'No requests yet.';
+$string['req_requested'] = 'Requested';
+$string['req_saved'] = 'Request sent. The fee is on your account, and the registrar will issue your official transcript.';
+$string['req_saved_nocharge'] = 'Request sent. The registrar will issue your official transcript.';
+$string['req_sendto'] = 'Send to (person or office)';
+$string['req_sentto'] = 'Sent to';
+$string['req_state_cancelled'] = 'Cancelled';
+$string['req_state_issued'] = 'Issued';
+$string['req_state_onhold'] = 'On hold';
+$string['req_state_pending'] = 'Pending';
+$string['req_state_waiting'] = 'Waiting';
+$string['req_submit'] = 'Request official transcript';
+$string['req_timing_degree'] = 'After my degree is awarded';
+$string['req_timing_grades'] = 'After this term\'s grades are posted';
+$string['req_timing_now'] = 'Right away';
+$string['req_title'] = 'Request an official transcript';
+$string['req_total'] = 'Total';
+$string['req_when'] = 'When should we send it?';
 $string['requestchange'] = 'Request change';
 $string['requestedby'] = 'Requested by';
 $string['reviewdrafts'] = 'Review {$a->n} draft(s): {$a->type}';
@@ -444,6 +520,8 @@ $string['schoolname'] = 'School name';
 $string['schoolname_desc'] = 'Printed at the top of the transcript.';
 $string['sealimage'] = 'Seal image';
 $string['sealimage_desc'] = 'Used only when "Signature and seal" is set to images. PNG or JPG.';
+$string['settings_fees'] = 'Official transcript fees';
+$string['settings_fees_desc'] = 'Fees for official transcript requests, in dollars. The fee goes on the student account in Student Records (billing on). 0 = free.';
 $string['settings_grades'] = 'Grades and hours';
 $string['settings_grades_desc'] = 'Edit the grading scale, marks, programs and catalog on their own pages (Site administration > Plugins > Local plugins > Academic Transcript).';
 $string['settings_header'] = 'Transcript settings';
@@ -474,6 +552,10 @@ $string['signingcert'] = 'Signing certificate (optional)';
 $string['signingcert_desc'] = 'A purchased document-signing certificate in PKCS#12 format (.p12 or .pfx). If empty, Official transcripts are signed with a free self-signed certificate created on this server: any change to the file is still detected, but PDF readers show the signer as not trusted.';
 $string['signingcertpassword'] = 'Signing certificate password';
 $string['signingcertpassword_desc'] = 'Password of the uploaded .p12/.pfx file.';
+$string['source'] = 'Source of the transcript';
+$string['source_desc'] = '"Student Records" reads the student\'s details, terms, courses and final grades, withdrawals, courses in progress, transfer credit and the conferred award from the Student Records plugin, read only. Grade arithmetic (GPA, repeats) stays with this plugin, so keep its grading scale and marks in step with Student Records: a grade missing here stops an Official transcript until you add it. Students without a Student Records file keep the transcript from this plugin\'s own data. Issued transcripts keep their frozen copy.';
+$string['source_own'] = 'This plugin\'s own data (posted grades)';
+$string['source_studentrecords'] = 'Student Records';
 $string['standardmarksadded'] = 'Standard marks added where missing.';
 $string['status'] = 'Status';
 $string['status_active'] = 'Active';
@@ -532,13 +614,24 @@ $string['unittype_help'] = 'Credit hours for degree programs; clock hours for no
 $string['unofficialcopy'] = 'Unofficial student copy';
 $string['unofficialnote'] = 'Unofficial student copy. Not valid as an Official transcript.';
 $string['usecourseterm'] = '(use the course term)';
-$string['verify'] = 'Verify';
+$string['verify_awarded'] = 'awarded {$a}';
+$string['verify_check'] = 'Check code';
+$string['verify_contact'] = 'Questions? Contact the Registrar\'s Office: {$a}.';
+$string['verify_degree'] = 'Degree';
+$string['verify_intro'] = 'Enter the code printed at the bottom of the transcript from {$a}, or scan its QR code.';
+$string['verify_issued'] = 'Issued';
+$string['verify_notfound'] = 'We couldn\'t find that code.';
+$string['verify_notfoundhelp'] = 'Check each letter and number, or scan the QR code instead. Codes look like ABCD-EFGH-JKLM-NPQR-STUV-WXYZ.';
+$string['verify_official'] = 'Official transcript, PDF';
+$string['verify_privacy'] = 'Check that the name and dates match the copy you have. Grades are not shown here, to protect the student\'s privacy.';
+$string['verify_program'] = 'Program';
+$string['verify_sentto'] = 'Sent to';
+$string['verify_student'] = 'Student';
+$string['verify_type'] = 'Type';
+$string['verify_valid'] = 'Valid transcript';
 $string['verifyat'] = 'Verify at';
 $string['verifycode'] = 'Verification code';
 $string['verifycodeshort'] = 'Code';
-$string['verifyfound'] = 'Valid. Official transcript {$a->no} for {$a->name}, issued on {$a->date} to {$a->to}. It is shown below exactly as issued.';
-$string['verifyintro'] = 'Enter the verification code printed at the bottom of an Official transcript.';
-$string['verifynotfound'] = 'No Official transcript matches this code. Check the code and try again.';
 $string['verifytitle'] = 'Verify a transcript';
 $string['viewtranscript'] = 'View transcript';
 $string['watermark'] = 'UNOFFICIAL · STUDENT COPY';

@@ -1,18 +1,4 @@
 <?php
-// This file is part of Moodle - https://moodle.org/
-//
-// Moodle is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// Moodle is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 namespace local_academictranscript\local;
 
@@ -25,7 +11,7 @@ require_once($CFG->libdir . '/gradelib.php');
  *
  * @package    local_academictranscript
  * @copyright  2026 Clouve Inc.
- * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ * @license    https://opensource.org/license/mit MIT
  */
 class posting {
     /**
@@ -33,7 +19,8 @@ class posting {
      *
      * @param int $courseid
      * @param int $userid
-     * @return array ['grade' => string|null, 'percent' => float|null, 'note' => string, 'termid' => int, 'error' => string]
+     * @return array ['grade' => string|null, 'percent' => float|null, 'note' => string, 'termid' => int, 'error' => string,
+     *     'posted' => posted record or null, 'sr' => Student Records target (srpost::target()) or null]
      */
     public static function preview(int $courseid, int $userid): array {
         global $DB;
@@ -70,6 +57,17 @@ class posting {
         if (!$result['error'] && $result['grade'] === null) {
             $result['error'] = get_string('nogradetopost', 'local_academictranscript');
         }
+        $result['sr'] = srpost::target($courseid, $userid);
+        if ($result['sr'] && $result['grade'] !== null) {
+            // The school's grading scale in Student Records decides the letter, also on a row that can't post.
+            $result['grade'] = srpost::letter($result['percent'], (string)$result['grade']);
+        }
+        if ($result['sr'] && !$result['error']) {
+            $result['error'] = srpost::problem($result['sr']);
+            if (!$result['error'] && $result['grade'] === null) {
+                $result['error'] = get_string('err_teacherpost_notonscale', 'local_studentrecords');
+            }
+        }
         return $result;
     }
 
@@ -94,6 +92,7 @@ class posting {
 
     /**
      * Post the final grade for one student in one course (for the term the student is taking it in).
+     * When Student Records is the transcript source, the grade also goes on the student's registration there.
      * Locks the student's course total in the gradebook.
      *
      * @param int $courseid
@@ -126,18 +125,31 @@ class posting {
             'postedby' => $USER->id,
             'timeposted' => $now,
             'timemodified' => $now,
+            'srregid' => $preview['sr'] ? (int)$preview['sr']['regid'] : null,
         ];
-        $record->id = $DB->insert_record('local_academictranscript_posted', $record);
+        // The page goes on to the next student after a failure, so a failure must not leave this transaction open.
+        $transaction = $DB->start_delegated_transaction();
+        try {
+            $record->id = $DB->insert_record('local_academictranscript_posted', $record);
+            if ($preview['sr']) {
+                srpost::post($courseid, $userid, $preview['percent'], (string)$preview['grade']);
+            }
 
-        // The hand-entered code belongs to this attempt: clear it (row kept) so a later attempt starts clean.
-        if ($coderow = $DB->get_record('local_academictranscript_code', ['userid' => $userid, 'courseid' => $courseid])) {
-            $DB->update_record('local_academictranscript_code', (object)['id' => $coderow->id, 'code' => null, 'note' => '',
-                'reason' => get_string('clearedonpost', 'local_academictranscript'), 'usermodified' => $USER->id,
-                'timemodified' => $now]);
+            // The hand-entered code belongs to this attempt: clear it (row kept) so a later attempt starts clean.
+            if ($coderow = $DB->get_record('local_academictranscript_code', ['userid' => $userid, 'courseid' => $courseid])) {
+                $DB->update_record('local_academictranscript_code', (object)['id' => $coderow->id, 'code' => null, 'note' => '',
+                    'reason' => get_string('clearedonpost', 'local_academictranscript'), 'usermodified' => $USER->id,
+                    'timemodified' => $now]);
+            }
+
+            $transaction->allow_commit();
+        } catch (\Throwable $e) {
+            $transaction->rollback($e);
         }
 
         self::lock_course_total($courseid, $userid);
-        logger::log('post', $userid, 0, "course $courseid term {$record->termid} grade {$record->grade}");
+        logger::log('post', $userid, 0, "course $courseid term {$record->termid} grade {$record->grade}" .
+            ($preview['sr'] ? " studentrecords reg {$preview['sr']['regid']}" : ''));
         return $record;
     }
 

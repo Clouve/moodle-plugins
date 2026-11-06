@@ -1,25 +1,12 @@
 <?php
-// This file is part of Moodle - https://moodle.org/
-//
-// Moodle is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// Moodle is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
- * A student's transcript: view, Unofficial download, Official issue (staff).
+ * A student's transcript: view, Unofficial download, Official issue (staff), and My transcript, where students see their
+ * own transcript and request an Official one.
  *
  * @package    local_academictranscript
  * @copyright  2026 Clouve Inc.
- * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ * @license    https://opensource.org/license/mit MIT
  */
 
 require_once(__DIR__ . '/../../config.php');
@@ -28,6 +15,8 @@ use local_academictranscript\local\access;
 use local_academictranscript\local\html_view;
 use local_academictranscript\local\logger;
 use local_academictranscript\local\pdf\builder;
+use local_academictranscript\local\request_view;
+use local_academictranscript\local\requests;
 use local_academictranscript\local\transcript;
 
 require_login(null, false);
@@ -71,6 +60,15 @@ if ($action === 'issue') {
     if ($recipient === '') {
         redirect($url, get_string('recipientrequired', 'local_academictranscript'), null, \core\output\notification::NOTIFY_ERROR);
     }
+    $holds = requests::holds($userid);
+    if ($holds) {
+        redirect(
+            $url,
+            get_string('issueonhold', 'local_academictranscript', s(implode('; ', $holds))),
+            null,
+            \core\output\notification::NOTIFY_ERROR
+        );
+    }
     $issue = transcript::issue($userid, $recipient);
     redirect(
         new moodle_url($url, ['issued' => $issue->id]),
@@ -81,15 +79,64 @@ if ($action === 'issue') {
     );
 }
 
+$own = (int)$userid === (int)$USER->id;
 $PAGE->set_url($url);
-$PAGE->set_context(context_user::instance($userid));
+// A student's own transcript has no profile header, so it uses the system context. Staff see the student's user context.
+$PAGE->set_context($own ? context_system::instance() : context_user::instance($userid));
 $PAGE->set_pagelayout('report');
 $title = get_string('studenttranscript', 'local_academictranscript');
 $PAGE->set_title($title . ': ' . fullname($user));
 $PAGE->set_heading(fullname($user));
 
+if ($own && $action === 'request') {
+    require_sesskey();
+    $request = ['delivery' => optional_param('delivery', 'email', PARAM_ALPHA),
+        'recipient' => optional_param('recipient', '', PARAM_TEXT), 'email' => optional_param('email', '', PARAM_RAW_TRIMMED),
+        'address' => optional_param('address', '', PARAM_TEXT), 'timing' => optional_param('timing', 'now', PARAM_ALPHA)];
+    try {
+        $requestid = requests::create($userid, $request);
+    } catch (moodle_exception $e) {
+        redirect($url, s($e->getMessage()), null, \core\output\notification::NOTIFY_ERROR);
+    }
+    $charged = $DB->get_field(requests::TABLE, 'charged', ['id' => $requestid]);
+    redirect(
+        $url,
+        get_string($charged ? 'req_saved' : 'req_saved_nocharge', 'local_academictranscript'),
+        null,
+        \core\output\notification::NOTIFY_SUCCESS
+    );
+}
+
 $data = transcript::build($userid);
 logger::log('view', $userid);
+
+if ($own) {
+    $at = 'local_academictranscript';
+    $PAGE->set_pagelayout('standard');
+    $PAGE->set_heading(get_string('mytranscript_title', $at));
+    $PAGE->navbar->ignore_active();
+    $srshell = class_exists('\\local_studentrecords\\local\\shell');
+    if ($srshell) {
+        $PAGE->navbar->add(get_string('pluginname', 'local_studentrecords'), new moodle_url('/local/studentrecords/index.php'));
+    }
+    $PAGE->navbar->add(get_string('mytranscript_title', $at), $url);
+    echo $OUTPUT->header();
+    if ($srshell) {
+        echo \local_studentrecords\local\shell::inline_menu();
+    }
+    $left = html_writer::div(html_view::transcript($data), 'sr-card at-preview', ['tabindex' => 0, 'role' => 'region',
+        'aria-label' => get_string('mytranscript_preview', $at)]);
+    $left .= html_writer::div(html_writer::link(
+        new moodle_url($url, ['action' => 'unofficial']),
+        get_string('downloadunofficial', $at),
+        ['class' => 'btn btn-outline-secondary']
+    ), 'sr-actions');
+    $right = request_view::form($userid, $url) . request_view::mine($userid);
+    echo html_writer::div(html_writer::div($left, 'sr-col-main') . html_writer::div($right, 'sr-col-side'), 'sr-columns');
+    $PAGE->requires->js_amd_inline(request_view::script());
+    echo $OUTPUT->footer();
+    return;
+}
 
 echo $OUTPUT->header();
 echo $OUTPUT->heading($title . ': ' . fullname($user));
@@ -141,7 +188,10 @@ echo html_writer::end_div();
 
 if ($canissue) {
     echo $OUTPUT->heading(get_string('issueofficial', 'local_academictranscript'), 4);
-    if ($data['problems']) {
+    $holds = requests::holds($userid);
+    if ($holds) {
+        echo html_writer::div(get_string('issueonhold', 'local_academictranscript', s(implode('; ', $holds))), 'text-muted mb-3');
+    } else if ($data['problems']) {
         echo html_writer::div(get_string('cannotissueyet', 'local_academictranscript'), 'text-muted mb-3');
     } else {
         echo html_writer::start_tag('form', ['method' => 'post', 'action' => $url->out(false), 'class' => 'mb-3',

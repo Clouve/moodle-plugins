@@ -1,18 +1,4 @@
 <?php
-// This file is part of Moodle - https://moodle.org/
-//
-// Moodle is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// Moodle is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 namespace local_academictranscript\local\pdf;
 
@@ -27,7 +13,7 @@ use local_academictranscript\local\transcript;
  * @package    local_academictranscript
  * @category   test
  * @copyright  2026 Clouve Inc.
- * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ * @license    https://opensource.org/license/mit MIT
  * @covers     \local_academictranscript\local\pdf\builder
  */
 final class builder_test extends \advanced_testcase {
@@ -95,6 +81,54 @@ final class builder_test extends \advanced_testcase {
 
         $unofficial = builder::render(transcript::build($user->id), null);
         $this->assertStringNotContainsString('/ByteRange', $unofficial);
+    }
+
+    /**
+     * An Official PDF has the QR code to the verify page next to the signature, with its caption. An Unofficial copy has
+     * neither, because it can't be verified.
+     */
+    public function test_only_official_pdf_has_the_qr_code(): void {
+        $this->setAdminUser();
+        $user = $this->getDataGenerator()->create_user();
+        $caption = get_string('qr_scan', 'local_academictranscript');
+
+        $issue = transcript::issue($user->id, 'Valley College');
+        $official = builder::render(json_decode($issue->snapshot, true), $issue);
+        $unofficial = builder::render(transcript::build($user->id), null);
+
+        $this->assertStringContainsString($caption, $this->parse($official)->getText());
+        $this->assertStringNotContainsString($caption, $this->parse($unofficial)->getText());
+
+        // TCPDF draws a QR code as hundreds of small filled squares.
+        $squares = fn(string $pdf) => substr_count($this->parse($pdf)->getPages()[0]->get('Contents')->getContent(), ' re');
+        $this->assertGreaterThan($squares($unofficial) + 200, $squares($official));
+    }
+
+    /**
+     * An older issued copy still draws: its rows get their hours from "credits" and it needs no unit fields of its own.
+     */
+    public function test_an_older_issued_copy_still_draws(): void {
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_academictranscript');
+        $this->setAdminUser();
+        $user = $this->getDataGenerator()->create_user();
+        $course = $this->getDataGenerator()->create_course();
+        $generator->create_posted_grade(['userid' => $user->id, 'courseid' => $course->id,
+            'termid' => $generator->create_term()->id, 'coursecode' => 'BIO 101', 'coursename' => 'Cell Biology', 'hours' => 3,
+            'grade' => 'A']);
+        $issue = transcript::issue($user->id, 'Valley College');
+        $data = json_decode($issue->snapshot, true);
+        unset($data['unittype'], $data['unitlabel'], $data['unitshort'], $data['credential']);
+        $data['version'] = 2;
+        foreach ($data['terms'][0]['rows'] as $i => $row) {
+            $data['terms'][0]['rows'][$i]['credits'] = $row['hours'];
+            unset($data['terms'][0]['rows'][$i]['hours']);
+        }
+
+        $pdf = builder::render(transcript::stored(json_encode($data)), $issue);
+
+        $text = $this->parse($pdf)->getText();
+        $this->assertStringContainsString('BIO 101', $text);
+        $this->assertStringContainsString('Cell Biology', $text);
     }
 
     /**

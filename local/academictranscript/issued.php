@@ -1,25 +1,11 @@
 <?php
-// This file is part of Moodle - https://moodle.org/
-//
-// Moodle is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// Moodle is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
  * Log of issued Official transcripts (admins) and re-download of an issued transcript.
  *
  * @package    local_academictranscript
  * @copyright  2026 Clouve Inc.
- * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ * @license    https://opensource.org/license/mit MIT
  */
 
 require_once(__DIR__ . '/../../config.php');
@@ -47,7 +33,14 @@ if ($id) {
             ''
         );
     }
-    $data = json_decode($issue->snapshot, true);
+    $data = transcript::stored((string)$issue->snapshot);
+    if ($data === null) {
+        throw new moodle_exception(
+            'issuedoldlayout',
+            'local_academictranscript',
+            new moodle_url('/local/academictranscript/index.php', ['userid' => $issue->userid])
+        );
+    }
     $pdf = builder::render($data, $issue);
     logger::log('redownload', (int)$issue->userid, (int)$issue->id);
     send_file($pdf, builder::filename($data, true), 0, 0, true, true, 'application/pdf');

@@ -1,18 +1,4 @@
 <?php
-// This file is part of Moodle - https://moodle.org/
-//
-// Moodle is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// Moodle is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 namespace local_academictranscript\local\pdf;
 
@@ -33,7 +19,7 @@ require_once($CFG->libdir . '/pdflib.php');
  *
  * @package    local_academictranscript
  * @copyright  2026 Clouve Inc.
- * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ * @license    https://opensource.org/license/mit MIT
  */
 class builder {
     /** @var float Content left edge (mm). */
@@ -618,9 +604,19 @@ class builder {
             $doc->MultiCell(20, 0, get_string('sig_seal', 'local_academictranscript'), 0, 'C', false, 1, $cx - 10, $cy - 4);
         }
 
-        // Signature.
+        // Signature. It is narrower on Official copies, where the QR code to the verify page sits next to it.
         $mx = $x + 32;
-        $mw = self::$w - 32 - 70;
+        $mw = self::$w - 32 - 70 - ($issue ? 26 : 0);
+        if ($issue) {
+            $qrurl = (new \moodle_url('/local/academictranscript/verify.php', ['code' => transcript::format_code(
+                $issue->verifycode
+            )]))->out(false);
+            $qrstyle = ['border' => false, 'padding' => 0, 'fgcolor' => [0, 0, 0], 'bgcolor' => false];
+            $doc->write2DBarcode($qrurl, 'QRCODE,M', $mx + $mw + 3, $y + 1, 22, 22, $qrstyle, 'N');
+            $doc->SetFont('sourcesans3', '', 6.5);
+            $doc->SetTextColor(61, 68, 82);
+            $doc->MultiCell(22, 0, get_string('qr_scan', 'local_academictranscript'), 0, 'C', false, 1, $mx + $mw + 3, $y + 23);
+        }
         $name = transcript::setting('registrarname');
         $title = transcript::setting('registrartitle');
         $doc->SetTextColor(27, 31, 39);
@@ -674,7 +670,8 @@ class builder {
         $doc->SetTextColor(61, 68, 82);
         $note = $issue ? ($signed ? get_string('digitallysigned', 'local_academictranscript') :
             get_string('notsigned', 'local_academictranscript')) : get_string('unofficialnote', 'local_academictranscript');
-        $doc->MultiCell($mw, 0, $note, 0, 'L', false, 1, $mx, $y + self::SIGH - 5);
+        // On an Official copy the note also runs under the QR code, so it stays on one line.
+        $doc->MultiCell($issue ? $mw + 25 : $mw, 0, $note, 0, 'L', false, 1, $mx, $y + self::SIGH - 5);
 
         // Issue details.
         if ($issue) {

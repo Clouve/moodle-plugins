@@ -1,18 +1,4 @@
 <?php
-// This file is part of Moodle - https://moodle.org/
-//
-// Moodle is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// Moodle is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 namespace local_academictranscript\local;
 
@@ -25,7 +11,7 @@ namespace local_academictranscript\local;
  * @package    local_academictranscript
  * @category   test
  * @copyright  2026 Clouve Inc.
- * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ * @license    https://opensource.org/license/mit MIT
  * @covers     \local_academictranscript\local\transcript
  */
 final class transcript_test extends \advanced_testcase {
@@ -533,5 +519,44 @@ final class transcript_test extends \advanced_testcase {
             return $exception;
         }
         $this->fail('The code did not throw a moodle_exception.');
+    }
+
+    /**
+     * A copy issued today comes back as it was stored.
+     */
+    public function test_stored_returns_a_current_copy_as_it_is(): void {
+        $this->setAdminUser();
+        $user = $this->getDataGenerator()->create_user();
+
+        $issue = transcript::issue($user->id, 'Valley College');
+
+        $this->assertSame(json_decode($issue->snapshot, true), transcript::stored($issue->snapshot));
+    }
+
+    /**
+     * An older copy gets its hours from "credits" and the unit fields it never had, on terms and on transfer credit.
+     */
+    public function test_stored_brings_an_older_copy_up_to_date(): void {
+        $snapshot = json_encode(['version' => 2, 'calendar' => 'Semester credits',
+            'terms' => [['name' => 'Fall', 'rows' => [['code' => 'BIO 101', 'credits' => 3.0]]]],
+            'transfer' => [['institution' => 'Hill College', 'rows' => [['code' => 'ENG 100', 'credits' => 4.0]]]]]);
+
+        $data = transcript::stored($snapshot);
+
+        $this->assertSame(3.0, (float)$data['terms'][0]['rows'][0]['hours']);
+        $this->assertSame(4.0, (float)$data['transfer'][0]['rows'][0]['hours']);
+        $this->assertSame(programs::CREDIT, $data['unittype']);
+        $this->assertSame('Semester credits', $data['unitlabel']);
+        $this->assertSame(programs::unit_short(programs::CREDIT), $data['unitshort']);
+        $this->assertSame('', $data['credential']);
+    }
+
+    /**
+     * The oldest copies have no terms, and a damaged copy is no transcript at all: neither can be drawn again.
+     */
+    public function test_stored_refuses_what_it_cannot_draw(): void {
+        $this->assertNull(transcript::stored(json_encode(['fullname' => 'Ana Ruiz', 'rows' => [['code' => 'BIO 101']]])));
+        $this->assertNull(transcript::stored('not json'));
+        $this->assertNull(transcript::stored(''));
     }
 }

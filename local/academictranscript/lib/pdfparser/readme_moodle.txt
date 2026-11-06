@@ -15,8 +15,9 @@ What is here
 ------------
 - src/ is the src/ folder of the upstream release, copied as it is.
 - LICENSE.txt is the license file of the upstream release.
+- GPL-3.0.txt is the text of the GNU GPL, which the LGPL asks to travel with the library. It is not from upstream.
 
-Nothing else from upstream is copied (no composer.json, tests or docs), and no file is
+Nothing else from upstream is copied (no composer.json, tests or docs), and no upstream file is
 changed. src/ and LICENSE.txt are identical to the files of the upstream release 2.13.1.
 
 How it is loaded

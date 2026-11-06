@@ -8,11 +8,13 @@ section "list-plugins on the real repo"
 
 run "$REAL_REPO/bin/list-plugins"
 assert_status "exits 0" 0
-assert_eq "lists only the Academic Transcript plugin" "local/academictranscript" "$OUT"
+assert_eq "lists the plugins of the repo, and nothing under .import" "local/academictranscript
+local/studentrecords
+theme/studentrecords" "$OUT"
 
 run "$REAL_REPO/bin/list-plugins" --json
 assert_status "--json exits 0" 0
-assert_eq "--json prints a one-item array" '["local/academictranscript"]' "$OUT"
+assert_eq "--json prints an array" '["local/academictranscript","local/studentrecords","theme/studentrecords"]' "$OUT"
 
 section "list-plugins with fixture plugins"
 
@@ -26,6 +28,8 @@ add_plugin "$repo" local/demo/sub local_sub 1.0.0
 add_plugin "$repo" tests/fixtures/plugin local_fixture 1.0.0
 add_plugin "$repo" dist/unpacked local_unpacked 1.0.0
 add_plugin "$repo" .git/modules/x local_gitmodule 1.0.0
+# In a hidden folder, such as the source a contributor keeps next to the code: never plugins.
+add_plugin "$repo" .import/plugins/local_incoming/incoming local_incoming 1.0.0
 # A version.php that does not set the component, such as a library's.
 mkdir -p "$repo/lib/thing"
 printf "<?php\n\$library->version = '1.2.3';\n" >"$repo/lib/thing/version.php"
