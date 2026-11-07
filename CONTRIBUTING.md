@@ -12,6 +12,7 @@ Bug reports, fixes and new plugins are welcome. This page says how to check your
 
 - Docker, for `bin/check`.
 - Bash and `zip`, for the scripts in `bin/`.
+- Python 3, for `bin/check-docs`.
 - Git, only to clone the repo and to tag a release. None of the scripts in `bin/` runs it on your computer.
 
 ## Run the checks
@@ -22,7 +23,7 @@ Run the checks before you open a pull request:
 bin/check --plugin local/academictranscript
 ```
 
-That runs every step on Moodle 5.3, PHP 8.3 and PostgreSQL. If you can, run another combination too, for example `--moodle 4.5 --php 8.1 --db mysqli`, because code that works on Moodle 5.3 can break on 4.5. If you change how two plugins work together, add `--together`. The [README](README.md) lists the options. If you change something in `bin/`, run `tests/run.sh` as well.
+That runs every step on Moodle 5.3, PHP 8.3 and PostgreSQL. If you can, run another combination too, for example `--moodle 4.5 --php 8.1 --db mysqli`, because code that works on Moodle 5.3 can break on 4.5. If you change how two plugins work together, add `--together`. The [README](README.md) lists the options. If you change something in `bin/` or `docs/`, run `tests/run.sh` as well.
 
 `bin/check` runs PHPUnit as root, so it shows one skipped test: the uninstall test for a signing-key folder that can't be deleted needs a user who isn't root. GitHub Actions runs it.
 
@@ -58,6 +59,12 @@ Every plugin runs on the same combinations. A plugin that supports other version
 - Keep bundled third-party code as upstream ships it. Declare it in `thirdpartylibs.xml` and describe it in a `readme_moodle.txt` next to it. The transcript fonts are the one exception: their license reserves the upstream name, so they are renamed, and their readme says how.
 - A plugin stays optional for the others. Check that a sibling is installed before you call it, and keep the plugin working without it.
 - Commit a transaction after its `try` block, with `records::commit()` in Student Records and `logger::commit()` in Academic Transcript. Moodle sends held-back messages during the commit, so a failed send comes after the data is saved and must not reach the `catch`.
+
+## Docs
+
+A change updates its docs in the same pull request. [Maintaining the docs](docs/MAINTAINING.md) says which pages to update and how to retake screenshots. Run `bin/check-docs`: it fails when a page, capability, setting, task, table or column has no mention in the docs. `tests/run.sh` runs it too, so CI does.
+
+The [developer docs](docs/developer/README.md) explain the architecture, the data model and the traps. Read [Pitfalls](docs/developer/pitfalls.md) before you change something that looks wrong.
 
 ## Tests
 

@@ -45,6 +45,10 @@ The top bar and the drawers are the theme's own templates, written to work on al
 
 Moodle 5.3 can turn on a dark colour mode in the settings of the Boost theme. The top bar, the drawers and the login page follow it, and the colour menu shows in the top bar. The pages of the Student Records and Academic Transcript plugins follow it too.
 
+## Documentation
+
+The [user manual](../../docs/user/theme/README.md) shows the theme and its settings. The [developer docs](../../docs/developer/theme/README.md) explain the code.
+
 ## Privacy
 
 The theme stores no personal data. Boost keeps the drawer preferences of each user.

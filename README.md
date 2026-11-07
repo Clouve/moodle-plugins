@@ -14,6 +14,8 @@ The folders follow Moodle's own layout, so a plugin has the same path here as in
 
 The three work on their own and together. Student Records and Academic Transcript share data when you set Academic Transcript's "Source of the transcript" to Student Records. Each plugin's README says what it needs from the others.
 
+The [documentation](docs/README.md) has a [user manual](docs/user/README.md) with step-by-step guides for each role, and [developer docs](docs/developer/README.md) for people and AI agents who change the code.
+
 The repo holds:
 
 - `local/academictranscript/`: the Academic Transcript plugin.
@@ -21,6 +23,7 @@ The repo holds:
 - `theme/studentrecords/`: the Student Records theme.
 - `bin/`: the scripts for checks, ZIP files and releases.
 - `tests/`: the tests of the scripts in `bin/`.
+- `docs/`: the [user manual](docs/user/README.md) and the [developer docs](docs/developer/README.md).
 - `.github/workflows/`: the CI and release workflows.
 
 ## Install a plugin from a release ZIP
@@ -82,8 +85,9 @@ GitHub Actions runs these checks plus the PHP Mess Detector and Behat on every p
 | `bin/build-zip <plugin path> [<out dir>]` | Builds `<out dir>/<component>-<release>.zip` and prints its path. The out dir defaults to `dist/`. The ZIP holds only the plugin folder, which is the layout Moodle's plugin installer expects. |
 | `bin/release-info <tag>` | Reads a tag such as `local_academictranscript-v1.0.0` and prints the plugin folder, the component, the release, the ZIP name and the path of a temporary file with the release notes. It fails when the tag, `version.php` and `CHANGES.md` don't agree. |
 | `bin/check [options] [steps]` | Runs the CI checks in Docker, as described above. It leaves out the PHP Mess Detector and Behat. |
+| `bin/check-docs` | Checks the docs against the code: links, images, repo paths, method names, that every page, capability, setting, task, table and column is named, and the writing rules. It needs Python 3. [Maintaining the docs](docs/MAINTAINING.md) has the details. |
 
-`tests/run.sh` runs the tests of these scripts. It needs no Docker. Run it when you change something in `bin/`.
+`tests/run.sh` runs the tests of these scripts, and `bin/check-docs` on the real docs. It needs no Docker. Run it when you change something in `bin/` or `docs/`.
 
 ## Release a plugin
 

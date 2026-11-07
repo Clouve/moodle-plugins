@@ -1,0 +1,470 @@
+#!/usr/bin/env python3
+"""Check the docs of this repo against the code. Run bin/check-docs --help.
+
+It needs Python 3 and nothing else. tests/docs.test.sh runs it on the real repo, so
+CI fails when the docs and the code drift apart.
+"""
+
+import argparse
+import os
+import re
+import subprocess
+import sys
+import xml.etree.ElementTree as ElementTree
+from pathlib import Path
+
+USAGE = """\
+bin/check-docs checks the Markdown files in docs/, AGENTS.md and CLAUDE.md. It prints
+one line for each problem, and exits 0 when there are none, 1 when there are some,
+and 2 when it can't run.
+
+These are the checks:
+
+  links     Every local link and anchor resolves, and every page can be reached
+            from docs/README.md.
+  images    Every image exists, has alt text and is under the size limit, the docs
+            folder is under its size limit, and no image outside docs/tools/ is
+            unused.
+  paths     Every path in backticks that starts with a folder of the repo or of a
+            plugin, such as local/ or classes/, exists.
+  symbols   Every class::method() in backticks exists, for classes of the plugins.
+  coverage  Every page, capability, setting, task, table, column, message type,
+            event and class of the plugins is named in the docs.
+  writing   The writing rules hold: no em or en dashes, curly quotes or exclamation
+            marks, no line numbers, sentence case headings, and a table of contents
+            on a long page.
+
+Examples:
+
+  bin/check-docs
+  bin/check-docs --only links,images,writing docs/user/academic-transcript
+"""
+
+CHECKS = ('links', 'images', 'paths', 'symbols', 'coverage', 'writing')
+MAX_IMAGE_BYTES = 320 * 1024
+MAX_DOCS_BYTES = 40 * 1024 * 1024
+TOC_HEADINGS = 5
+IMAGE_TYPES = {'.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp'}
+
+# Folders in a plugin that a doc may name without the plugin's own path.
+PLUGIN_FOLDERS = ('classes/', 'db/', 'lang/', 'cli/', 'templates/', 'layout/', 'scss/', 'fonts/', 'tests/generator/')
+# Top-level folders of the repo, for paths that start at the repo root.
+REPO_FOLDERS = ('local/', 'theme/', 'bin/', 'tests/', 'docs/', '.github/')
+# Top-level PHP files of a plugin that aren't pages.
+NOT_PAGES = {'version.php', 'settings.php', 'lib.php', 'config.php'}
+# Names that keep their capitals in a heading.
+NAMES = {
+    'Academic', 'Transcript', 'Transcripts', 'Student', 'Students', 'Records', 'Moodle', 'Boost', 'PayPal', 'Stripe',
+    'GitHub', 'Docker', 'Selenium', 'Chrome', 'Python', 'PostgreSQL', 'MySQL', 'MariaDB', 'Mermaid', 'Official',
+    'Unofficial', 'Clearinghouse', 'National', 'Federal', 'Return', 'Direct', 'Grant', 'Pell', 'English', 'Spanish',
+    'Word', 'OpenDocument', 'Ghostscript', 'TCPDF', 'PHPUnit', 'Behat', 'Finance', 'Registrar', 'Key',
+}
+
+
+def strip_code(line):
+    """Blank out inline code, so that only prose is left."""
+    return re.sub(r'(`+)(?:(?!\1).)+\1', lambda m: ' ' * len(m.group(0)), line)
+
+
+def prose_lines(text):
+    """Yield (number, line) for each line outside fenced code blocks and HTML comments."""
+    fence = None
+    comment = False
+    for number, line in enumerate(text.split('\n'), 1):
+        stripped = line.strip()
+        marker = re.match(r'(```+|~~~+)', stripped)
+        if marker:
+            if fence is None:
+                fence = marker.group(1)[:3]
+            elif stripped.startswith(fence):
+                fence = None
+            continue
+        if fence is not None:
+            continue
+        if comment:
+            if '-->' in line:
+                comment = False
+            continue
+        if '<!--' in line:
+            if '-->' not in line:
+                comment = True
+            line = re.sub(r'<!--.*?(-->|$)', '', line)
+        yield number, line
+
+
+def slug(text):
+    """Make the anchor GitHub gives a heading."""
+    text = re.sub(r'!?\[([^\]]*)\]\([^)]*\)', r'\1', text)
+    text = text.replace('`', '').replace('*', '').strip().lower()
+    text = re.sub(r'[^\w\- ]', '', text)
+    return text.replace(' ', '-')
+
+
+def headings(text):
+    """Return (number, level, heading text) for each heading of a page."""
+    found = []
+    for number, line in prose_lines(text):
+        match = re.match(r'(#{1,6})\s+(.*?)\s*#*\s*$', line)
+        if match:
+            found.append((number, len(match.group(1)), match.group(2)))
+    return found
+
+
+def anchors(text):
+    """Return every anchor of a page."""
+    seen = {}
+    result = set()
+    for _, _, heading in headings(text):
+        base = slug(heading)
+        count = seen.get(base, 0)
+        seen[base] = count + 1
+        result.add(base if count == 0 else f'{base}-{count}')
+    result.update(re.findall(r'<a\s+(?:name|id)="([^"]+)"', text))
+    return result
+
+
+class Checker:
+    """One run over the docs of a repo."""
+
+    def __init__(self, root, checks, scope):
+        self.root = root
+        self.checks = checks
+        self.scope = scope
+        self.problems = []
+        self.pages = {}
+        for path in sorted((root / 'docs').rglob('*.md')) if (root / 'docs').is_dir() else []:
+            self.pages[path] = path.read_text(encoding='utf-8')
+        for name in ('AGENTS.md', 'CLAUDE.md'):
+            path = root / name
+            if path.is_file():
+                self.pages[path] = path.read_text(encoding='utf-8')
+        self.plugins = self.find_plugins()
+
+    def find_plugins(self):
+        result = subprocess.run([str(self.root / 'bin' / 'list-plugins')], capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            print(f'check-docs: bin/list-plugins failed: {result.stderr.strip()}', file=sys.stderr)
+            raise SystemExit(2)
+        return [line for line in result.stdout.split('\n') if line]
+
+    def rel(self, path):
+        return str(Path(path).relative_to(self.root))
+
+    def report(self, path, number, message):
+        where = self.rel(path) + (f':{number}' if number else '')
+        self.problems.append(f'{where}: {message}')
+
+    def in_scope(self, path):
+        if not self.scope:
+            return True
+        name = self.rel(path)
+        return any(name == item or name.startswith(item.rstrip('/') + '/') for item in self.scope)
+
+    def scoped_pages(self):
+        return [(path, text) for path, text in self.pages.items() if self.in_scope(path)]
+
+    # Links.
+
+    def check_links(self):
+        cache = {}
+        for path, text in self.scoped_pages():
+            for number, line in prose_lines(text):
+                for target in re.findall(r'\]\(([^()\s]+)(?:\s+"[^"]*")?\)', strip_code(line)):
+                    if re.match(r'[a-z][a-z0-9+.-]*:', target):
+                        continue
+                    file_part, _, anchor = target.partition('#')
+                    resolved = (path.parent / file_part).resolve() if file_part else path
+                    if not resolved.exists():
+                        self.report(path, number, f'link target not found: {target}')
+                        continue
+                    if anchor and resolved.suffix == '.md':
+                        if resolved not in cache:
+                            cache[resolved] = anchors(resolved.read_text(encoding='utf-8'))
+                        if anchor not in cache[resolved]:
+                            self.report(path, number, f'anchor not found: {target}')
+        self.check_reachable()
+
+    def check_reachable(self):
+        start = self.root / 'docs' / 'README.md'
+        if start not in self.pages:
+            self.report(start, 0, 'docs/README.md is missing')
+            return
+        seen = {start}
+        queue = [start]
+        while queue:
+            page = queue.pop()
+            for number, line in prose_lines(self.pages[page]):
+                for target in re.findall(r'\]\(([^()\s#]+)', strip_code(line)):
+                    if re.match(r'[a-z][a-z0-9+.-]*:', target):
+                        continue
+                    resolved = (page.parent / target).resolve()
+                    if resolved in self.pages and resolved not in seen:
+                        seen.add(resolved)
+                        queue.append(resolved)
+        for page in self.pages:
+            if page not in seen and page.parent != self.root and self.in_scope(page):
+                self.report(page, 0, 'no link leads here from docs/README.md')
+
+    # Images.
+
+    def check_images(self):
+        used = set()
+        for path, text in self.pages.items():
+            for number, line in prose_lines(text):
+                clean = strip_code(line)
+                for alt, target in re.findall(r'!\[([^\]]*)\]\(([^()\s]+)', clean):
+                    if not re.match(r'[a-z][a-z0-9+.-]*:', target):
+                        resolved = (path.parent / target).resolve()
+                        used.add(resolved)
+                        if self.in_scope(path) and not resolved.is_file():
+                            self.report(path, number, f'image not found: {target}')
+                    if self.in_scope(path) and not alt.strip():
+                        self.report(path, number, f'image has no alt text: {target}')
+                for tag in re.findall(r'<img\b[^>]*>', clean):
+                    source = re.search(r'src="([^"]+)"', tag)
+                    if source and not re.match(r'[a-z][a-z0-9+.-]*:', source.group(1)):
+                        resolved = (path.parent / source.group(1)).resolve()
+                        used.add(resolved)
+                        if self.in_scope(path) and not resolved.is_file():
+                            self.report(path, number, 'image not found: ' + source.group(1))
+                    if self.in_scope(path) and not re.search(r'alt="[^"]+"', tag):
+                        self.report(path, number, 'image has no alt text: ' + tag)
+        total = 0
+        docs = self.root / 'docs'
+        for file in sorted(docs.rglob('*')) if docs.is_dir() else []:
+            if not file.is_file():
+                continue
+            size = file.stat().st_size
+            total += size
+            if file.suffix.lower() in IMAGE_TYPES and self.in_scope(file):
+                if size > MAX_IMAGE_BYTES:
+                    self.report(file, 0, f'image is {size // 1024} KB, and the limit is {MAX_IMAGE_BYTES // 1024} KB')
+                if file.resolve() not in used and 'tools' not in file.relative_to(docs).parts:
+                    self.report(file, 0, 'no page uses this image')
+        if total > MAX_DOCS_BYTES:
+            self.report(docs, 0, f'docs folder is {total // 1024 // 1024} MB, and the limit is 40 MB')
+
+    # Paths and symbols.
+
+    def code_tokens(self, text):
+        """Yield (number, token) for each inline code span and link-free token of a page."""
+        for number, line in prose_lines(text):
+            for token in re.findall(r'`([^`]+)`', line):
+                yield number, token.strip()
+
+    def path_exists(self, token):
+        if (self.root / token).exists():
+            return True
+        return any((self.root / plugin / token).exists() for plugin in self.plugins)
+
+    def check_paths(self):
+        for path, text in self.scoped_pages():
+            for number, token in self.code_tokens(text):
+                candidate = token.split('?')[0].split('#')[0]
+                candidate = re.sub(r'^/', '', candidate)
+                candidate = re.sub(r'^public/', '', candidate)
+                if re.search(r'[<>{}*$\s:=,|()\[\]]', candidate):
+                    continue
+                if not candidate.startswith(REPO_FOLDERS + PLUGIN_FOLDERS):
+                    continue
+                if not self.path_exists(candidate):
+                    self.report(path, number, f'path not found: {token}')
+
+    def class_index(self):
+        """Map the short name of each plugin class to the methods and constants it has."""
+        index = {}
+        for plugin in self.plugins:
+            folder = self.root / plugin
+            files = list((folder / 'classes').rglob('*.php')) if (folder / 'classes').is_dir() else []
+            generator = folder / 'tests' / 'generator' / 'lib.php'
+            if generator.is_file():
+                files.append(generator)
+            for file in files:
+                source = file.read_text(encoding='utf-8', errors='replace')
+                for name in re.findall(r'^(?:final\s+|abstract\s+)*(?:class|interface|trait|enum)\s+(\w+)', source, re.M):
+                    members = index.setdefault(name, set())
+                    members.update(re.findall(r'function\s+&?(\w+)\s*\(', source))
+                    members.update(re.findall(r'\bconst\s+(?:\w+\s+)?(\w+)\s*=', source))
+                    members.update(['class'])
+        return index
+
+    def check_symbols(self):
+        index = self.class_index()
+        for path, text in self.scoped_pages():
+            for number, token in self.code_tokens(text):
+                for name, member in re.findall(r'(?:^|[\s\\(])(\w+)::(\w+)', token):
+                    if name in index and member not in index[name]:
+                        self.report(path, number, f'{name} has no {member}: {token}')
+
+    # Coverage.
+
+    def settings_of(self, plugin, component):
+        """Return the settings of a plugin: its settings.php, and school settings if it has them."""
+        names = set()
+        file = self.root / plugin / 'settings.php'
+        if file.is_file():
+            source = file.read_text(encoding='utf-8', errors='replace')
+            headings_only = set(re.findall(r'admin_setting_heading\(\s*["\'][^"\']*/(\w+)["\']', source))
+            names.update(re.findall(r'["\'](?:\$\w+|' + component + r')/(\w+)["\']', source))
+            names -= headings_only
+        catalog = self.root / plugin / 'classes' / 'local' / 'catalog.php'
+        if catalog.is_file():
+            source = catalog.read_text(encoding='utf-8', errors='replace')
+            block = re.search(r'const SCHOOL = \[(.*?)\n    \];', source, re.S)
+            if block:
+                names.update(re.findall(r"'(\w+)' => \[", block.group(1)))
+        for php in (self.root / plugin).rglob('*.php'):
+            if '/tests/' in str(php):
+                continue
+            names.update(re.findall(r"catalog::setting\('(\w+)'\)", php.read_text(encoding='utf-8', errors='replace')))
+        return names
+
+    def items_of(self, plugin):
+        """Return (kind, name) for what a plugin holds that the docs must name."""
+        folder = self.root / plugin
+        version = (folder / 'version.php').read_text(encoding='utf-8', errors='replace')
+        component = re.search(r"\$plugin->component\s*=\s*'(\w+)'", version).group(1)
+        items = []
+        for file in sorted(folder.glob('*.php')):
+            if file.name not in NOT_PAGES:
+                items.append(('page', file.name))
+        access = folder / 'db' / 'access.php'
+        if access.is_file():
+            for name in re.findall(r"^\s*'([a-z_]+/[a-z_]+:\w+)'\s*=>", access.read_text(encoding='utf-8'), re.M):
+                items.append(('capability', name))
+        for name in sorted(self.settings_of(plugin, component)):
+            items.append(('setting', name))
+        tasks = folder / 'classes' / 'task'
+        for file in sorted(tasks.glob('*.php')) if tasks.is_dir() else []:
+            items.append(('task', file.stem))
+        events = folder / 'classes' / 'event'
+        for file in sorted(events.glob('*.php')) if events.is_dir() else []:
+            items.append(('event', file.stem))
+        classes = folder / 'classes'
+        for file in sorted(classes.rglob('*.php')) if classes.is_dir() else []:
+            # Tasks and events are named above, as what they are.
+            if file.relative_to(classes).parts[0] not in ('task', 'event'):
+                items.append(('class', file.stem))
+        messages = folder / 'db' / 'messages.php'
+        if messages.is_file():
+            source = messages.read_text(encoding='utf-8')
+            for name in re.findall(r"^    '(\w+)' => \[", source, re.M):
+                items.append(('message type', name))
+        return items
+
+    def check_coverage(self):
+        docs = '\n'.join(text for path, text in self.pages.items() if '/docs/tools/' not in str(path))
+        for plugin in self.plugins:
+            for kind, name in self.items_of(plugin):
+                if not re.search(r'(?<![\w])' + re.escape(name) + r'(?!\w)', docs):
+                    self.problems.append(f'{plugin}: the docs name no {kind} {name}')
+            self.check_tables(plugin)
+
+    def check_tables(self, plugin):
+        file = self.root / plugin / 'db' / 'install.xml'
+        if not file.is_file():
+            return
+        developer = {path: text for path, text in self.pages.items() if '/docs/developer/' in str(path)}
+        for table in ElementTree.parse(file).getroot().iter('TABLE'):
+            name = table.get('NAME')
+            columns = [field.get('NAME') for field in table.iter('FIELD')]
+            section = self.table_section(developer, name)
+            if section is None:
+                self.problems.append(f'{plugin}: docs/developer has no heading for table {name}')
+                continue
+            for column in columns:
+                if f'`{column}`' not in section:
+                    self.problems.append(f'{plugin}: the section of table {name} names no column {column}')
+
+    @staticmethod
+    def table_section(pages, name):
+        """Return the text under the heading that names a table, up to the next such heading."""
+        for text in pages.values():
+            lines = text.split('\n')
+            found = headings(text)
+            for index, (number, level, heading) in enumerate(found):
+                if re.search(r'(?<![\w])' + re.escape(name) + r'(?!\w)', heading):
+                    end = len(lines)
+                    for later_number, later_level, _ in found[index + 1:]:
+                        if later_level <= level:
+                            end = later_number - 1
+                            break
+                    return '\n'.join(lines[number:end])
+        return None
+
+    # Writing.
+
+    def check_writing(self):
+        for path, text in self.scoped_pages():
+            for number, line in prose_lines(text):
+                clean = strip_code(line)
+                clean = re.sub(r'\]\([^)]*\)', ']', clean)
+                clean = re.sub(r'https?://\S+', '', clean)
+                clean = re.sub(r'<[^>]+>', '', clean)
+                for char, name in (('—', 'em dash'), ('–', 'en dash')):
+                    if char in clean:
+                        self.report(path, number, f'{name}: {line.strip()[:80]}')
+                if re.search('[‘’“”]', clean):
+                    self.report(path, number, f'curly quote: {line.strip()[:80]}')
+                if '!' in clean.replace('![', ''):
+                    self.report(path, number, f'exclamation mark: {line.strip()[:80]}')
+                if re.search(r'\b[\w./-]+\.(php|js|sh|mustache|xml|scss):\d+', line) or \
+                        re.search(r'\b(line|lines) \d+\b', clean, re.I):
+                    self.report(path, number, f'line number: {line.strip()[:80]}')
+            self.check_headings(path, text)
+
+    def check_headings(self, path, text):
+        found = headings(text)
+        for number, _, heading in found:
+            plain = strip_code(re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', heading))
+            words = re.findall(r"[A-Za-z][A-Za-z'-]*", plain)
+            later = words[1:]
+            capitals = [w for w in later if w[0].isupper() and not w.isupper() and w not in NAMES]
+            if len(later) >= 2 and len(capitals) * 2 > len(later):
+                self.report(path, number, f'heading is not in sentence case: {heading}')
+        seconds = [heading for _, level, heading in found if level == 2 and heading != 'Contents']
+        if len(seconds) >= TOC_HEADINGS:
+            has_toc = any(heading == 'Contents' for _, level, heading in found if level == 2)
+            if not has_toc:
+                self.report(path, 0, f'{len(seconds)} sections and no "## Contents" heading')
+                return
+            links = set(re.findall(r'\]\(#([^)\s]+)\)', text))
+            for heading in seconds:
+                if slug(heading) not in links:
+                    self.report(path, 0, f'Contents has no link to: {heading}')
+
+    def run(self):
+        for check in self.checks:
+            getattr(self, 'check_' + check)()
+        return self.problems
+
+
+def main():
+    parser = argparse.ArgumentParser(add_help=False, usage='bin/check-docs [--only <checks>] [<path>...]')
+    parser.add_argument('--only', default=','.join(CHECKS))
+    parser.add_argument('-h', '--help', action='store_true')
+    parser.add_argument('paths', nargs='*')
+    options = parser.parse_args()
+    if options.help:
+        print(USAGE)
+        return 0
+    checks = [check for check in options.only.split(',') if check]
+    unknown = [check for check in checks if check not in CHECKS]
+    if unknown:
+        print('check-docs: no such check: ' + ', '.join(unknown), file=sys.stderr)
+        return 2
+    root = Path(__file__).resolve().parent.parent
+    if not (root / 'docs').is_dir():
+        print('check-docs: no docs folder', file=sys.stderr)
+        return 2
+    scope = [os.path.relpath(os.path.abspath(item), root) for item in options.paths]
+    checker = Checker(root, checks, scope)
+    problems = checker.run()
+    for problem in problems:
+        print(problem)
+    print(f'check-docs: {len(checker.pages)} pages, {len(problems)} problems')
+    return 1 if problems else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

@@ -213,6 +213,10 @@ The plugin makes no network calls of its own. In the setup wizard, Moodle sends 
 
 Both bundled items are declared in `thirdpartylibs.xml`. Each has a `readme_moodle.txt` that says where it came from and how to update it: `lib/pdfparser/readme_moodle.txt` and `fonts/readme_moodle.txt`.
 
+## Documentation
+
+The [user manual](../../docs/user/academic-transcript/README.md) has a guide for each role, with screenshots. The [developer docs](../../docs/developer/academic-transcript/README.md) explain the code.
+
 ## Help
 
 Report bugs and ask questions on the [issue tracker](https://github.com/Clouve/moodle-plugins/issues). To report a security problem in private, follow [SECURITY.md](../../SECURITY.md). The release notes are in [CHANGES.md](CHANGES.md).

@@ -208,6 +208,10 @@ The plugin's retention choices are a starting point. Each school should check th
 
 The unit tests are in `tests/`, with a test data generator in `tests/generator/`. The browser tests in `tests/behat/` need a Behat test site, such as the one moodle-plugin-ci sets up. They don't run on a live site.
 
+## Documentation
+
+The [user manual](../../docs/user/student-records/README.md) has a guide for each role and each area, with screenshots. The [developer docs](../../docs/developer/student-records/README.md) explain the code.
+
 ## Help
 
 Report bugs and ask questions on the [issue tracker](https://github.com/Clouve/moodle-plugins/issues). To report a security problem in private, follow [SECURITY.md](../../SECURITY.md). The release notes are in [CHANGES.md](CHANGES.md).
