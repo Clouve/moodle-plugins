@@ -5,7 +5,8 @@ namespace local_studentrecords\local;
 /**
  * Payment plans: the plans a school offers, a plan given to a student for a term (with its schedule of payments),
  * reminders before each due date, and late payments (late fee, then a financial hold after the grace days; staff
- * decide any drop). Payments and credits made after a plan starts count toward its payments in due order.
+ * decide any drop). Payments and credits made after a plan starts count toward its payments in due order. A plan covers the
+ * whole balance, so a student has one active plan at a time: a second one would count the same payments again.
  *
  * @package    local_studentrecords
  * @copyright  2026 Clouve Inc.
@@ -215,6 +216,17 @@ class plans {
     }
 
     /**
+     * Whether a student has an active plan, for any term.
+     *
+     * @param int $studentid
+     * @return bool
+     */
+    public static function has_active(int $studentid): bool {
+        global $DB;
+        return $DB->record_exists(self::STUPLANS, ['studentid' => $studentid, 'status' => 'active']);
+    }
+
+    /**
      * The schedule a plan would have for a student now: the amount it covers and its payments.
      *
      * @param \stdClass $student
@@ -274,7 +286,7 @@ class plans {
 
     /**
      * Give a student a plan for a term: the plan fee is charged, the balance is split into the down payment (due
-     * today) and the payments.
+     * today) and the payments. A student who has an active plan, for any term, can't get another one.
      *
      * @param \stdClass $student
      * @param int $termid
@@ -290,7 +302,7 @@ class plans {
         }
         return billing::one_at_a_time(function () use ($student, $termid, $planid, $terms, $note) {
             global $DB, $USER;
-            if ($DB->record_exists(self::STUPLANS, ['studentid' => $student->id, 'termid' => $termid, 'status' => 'active'])) {
+            if (self::has_active((int)$student->id)) {
                 throw new \moodle_exception('err_planexists', 'local_studentrecords');
             }
             $preview = self::preview($student, $termid, $terms);
@@ -334,21 +346,24 @@ class plans {
     }
 
     /**
-     * Money paid toward a plan: payments and credits added since the plan started (a returned payment counts back).
+     * Money paid toward a plan: payments and credits added since the plan started. A returned payment counts back, but only
+     * when the payment itself counted: a line from before the plan was never part of it.
      *
      * @param \stdClass $plan
      * @return float
      */
     public static function paid_toward(\stdClass $plan): float {
         global $DB;
-        return round(-(float)$DB->get_field_sql("SELECT COALESCE(SUM(amount), 0) FROM {" . billing::TXN . "}
-            WHERE studentid = ? AND txntype IN ('payment', 'credit') AND timecreated >= ?", [$plan->studentid,
-            $plan->timeapproved]), 2);
+        return round(-(float)$DB->get_field_sql("SELECT COALESCE(SUM(t.amount), 0) FROM {" . billing::TXN . "} t
+                                            LEFT JOIN {" . billing::TXN . "} o ON o.id = t.reverses
+                                                WHERE t.studentid = ? AND t.txntype IN ('payment', 'credit')
+                                                  AND t.timecreated >= ? AND (o.id IS NULL OR o.timecreated >= ?)", [
+            $plan->studentid, $plan->timeapproved, $plan->timeapproved]), 2);
     }
 
     /**
      * Bring a student's plans up to date: what is paid on each payment, paid / late, plan completed. A completed plan is
-     * looked at too, because a returned payment opens it again.
+     * looked at too, because a returned payment opens it again, unless another plan is active: a student has one active plan.
      *
      * @param \stdClass $student
      */
@@ -356,10 +371,11 @@ class plans {
         global $DB;
         $today = catalog::time_to_date(time());
         $select = "studentid = ? AND status IN ('active', 'completed')";
-        foreach ($DB->get_records_select(self::STUPLANS, $select, [$student->id]) as $plan) {
+        foreach ($DB->get_records_select(self::STUPLANS, $select, [$student->id], 'timeapproved DESC, id DESC') as $plan) {
             $insts = array_values($DB->get_records(self::INSTS, ['stuplanid' => $plan->id], 'seq'));
             $paid = self::allocate(array_map(fn($i) => (float)$i->amount, $insts), self::paid_toward($plan));
             $allpaid = true;
+            $waspaid = true;
             foreach ($insts as $k => $inst) {
                 $full = $paid[$k] >= round((float)$inst->amount, 2) - 0.004;
                 $status = $full ? 'paid' : (self::is_late(
@@ -368,16 +384,43 @@ class plans {
                     $today
                 ) ? 'late' : 'due');
                 $allpaid = $allpaid && $full;
+                $waspaid = $waspaid && $inst->status === 'paid';
                 if ($status !== $inst->status || abs($paid[$k] - (float)$inst->paid) > 0.004) {
                     $DB->update_record(self::INSTS, (object)['id' => $inst->id, 'paid' => $paid[$k], 'status' => $status,
                         'timepaid' => $full ? ($inst->timepaid ?: time()) : null, 'timemodified' => time()]);
                 }
             }
             $status = $allpaid ? 'completed' : 'active';
-            if ($status !== $plan->status) {
+            if ($status === 'active' && $plan->status === 'completed' && self::has_active((int)$student->id)) {
+                if ($waspaid) {
+                    self::tell_not_reopened($student, $plan);
+                }
+            } else if ($status !== $plan->status) {
                 records::save(self::STUPLANS, ['id' => $plan->id, 'status' => $status], 'billing', (int)$student->userid);
             }
         }
+    }
+
+    /**
+     * Say that a completed plan is no longer paid in full and can't reopen: at once to the person whose change did it, and for
+     * good in the note of the plan, which Finance sees on the account.
+     *
+     * @param \stdClass $student
+     * @param \stdClass $plan
+     */
+    protected static function tell_not_reopened(\stdClass $student, \stdClass $plan): void {
+        global $DB;
+        $select = "studentid = ? AND status = 'active'";
+        $text = get_string('plan_notreopened', 'local_studentrecords', (object)['plan' => $plan->name,
+            'active' => $DB->get_field_select(self::STUPLANS, 'name', $select, [$student->id], IGNORE_MULTIPLE)]);
+        records::save(
+            self::STUPLANS,
+            ['id' => $plan->id, 'note' => trim($plan->note . "\n" . $text)],
+            'billing',
+            (int)$student->userid
+        );
+        audit::log('update', 'plan', (int)$plan->id, (int)$student->userid, 'not reopened: another plan is active');
+        \core\notification::warning(s($text));
     }
 
     /**
@@ -443,7 +486,6 @@ class plans {
             }
             foreach ($DB->get_records(self::INSTS, ['stuplanid' => $plan->id], 'seq') as $inst) {
                 $due = catalog::time_to_date((int)$inst->duedate);
-                $owed = round((float)$inst->amount - (float)$inst->paid, 2);
                 // Each step and its mark are saved together, so that a task that stops halfway does not do a step twice.
                 if (
                     $days > 0 && $inst->status === 'due' && !$inst->reminded && $inst->seq > 0 && $due >= $today &&
@@ -469,10 +511,10 @@ class plans {
                     $counts['latefees']++;
                 }
                 if (!$inst->holdid && !self::billing_hold_in_force($plan)) {
-                    billing::transaction(function () use ($DB, $inst, $plan, $student, $owed, $p) {
+                    billing::transaction(function () use ($DB, $inst, $plan, $student, $p) {
                         $holdid = academic::place_hold($student, ['holdtype' => 'financial', 'blocksreg' => 1,
                             'startdate' => time(), 'reason' => get_string('latehold', $p, (object)['plan' => $plan->name,
-                            'date' => catalog::show_date((int)$inst->duedate), 'amount' => billing::money($owed)])]);
+                            'date' => catalog::show_date((int)$inst->duedate)])]);
                         $DB->set_field(self::INSTS, 'holdid', $holdid, ['id' => $inst->id]);
                         messages::student('paymentlate', $student);
                         messages::staff('stafflate', $student, new \moodle_url(

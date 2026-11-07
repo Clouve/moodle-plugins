@@ -173,6 +173,30 @@
     margin-top: 0;
 }
 
+/* The menu comes twice, open for wide screens and folded for small ones, and each screen shows its own copy. */
+.sr-inline-menu-small {
+    display: none;
+}
+
+/* On a small screen the summary is the only way to the menu, so the whole bar is a target for a finger. */
+@media screen and (max-width: 767.98px) {
+    .sr-inline-menu-wide {
+        display: none;
+    }
+    .sr-inline-menu-small {
+        display: block;
+        padding: 0;
+    }
+    .sr-inline-menu-small > summary {
+        padding: 10px 12px;
+        border-radius: 6px;
+    }
+    .sr-inline-menu-small .sr-nav {
+        margin-top: 0;
+        padding: 0 12px 8px;
+    }
+}
+
 /* Student Records pages use the full width (Boost keeps standard pages narrow). */
 @media (min-width: 768px) {
     body.path-local-studentrecords.pagelayout-standard #page.drawers .main-inner,
@@ -913,6 +937,115 @@
 
 .sr-details > summary {
     cursor: pointer;
+}
+
+/* Grade changes: the facts of a request in a row, then its reason and decision across the whole width, with no line between
+   them, so a request reads as one block. Moodle 5.1 and later set table borders with a strong selector, hence #region-main. */
+#region-main .sr-changes tr.sr-change-facts,
+#region-main .sr-changes tr.sr-change-facts > td {
+    border-bottom: 0;
+}
+
+#region-main .sr-changes tr.sr-change-detail,
+#region-main .sr-changes tr.sr-change-detail > td {
+    border-top: 0;
+}
+
+/* The name is the one fact that can be long. Other cells keep their words whole. */
+.sr-changes tr.sr-change-facts > td.c1 {
+    overflow-wrap: anywhere;
+}
+
+.sr-changes tr.sr-change-detail > td {
+    padding-top: 0;
+}
+
+.sr-change-line {
+    display: grid;
+    grid-template-columns: 7rem minmax(0, 1fr);
+    gap: 2px 12px;
+    max-width: 46rem;
+    margin-bottom: 8px;
+}
+
+.sr-change-line:last-child {
+    margin-bottom: 0;
+}
+
+.sr-change-label {
+    font-weight: 700;
+}
+
+.sr-change-body {
+    overflow-wrap: anywhere;
+}
+
+.sr-change-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.sr-change-form .form-control {
+    flex: 1 1 14rem;
+    width: auto;
+}
+
+/* Below this width the table can't fit beside the drawer, so each request stacks: its facts with their labels, in as many
+   columns as fit, then its reason and decision. */
+@media (max-width: 1199.98px) {
+    .sr-changes thead {
+        display: none;
+    }
+    .sr-changes,
+    .sr-changes tbody,
+    .sr-changes tr,
+    .sr-changes tr > td {
+        display: block;
+        width: auto;
+    }
+    #region-main .sr-changes,
+    #region-main .sr-changes tbody,
+    #region-main .sr-changes tr,
+    #region-main .sr-changes tr > td {
+        border: 0;
+    }
+    .sr-changes tr.sr-change-facts {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+        gap: 0 24px;
+    }
+    .sr-changes tr.sr-change-facts > td {
+        display: grid;
+        grid-template-columns: 7rem minmax(0, 1fr);
+        gap: 12px;
+        padding: 2px 0;
+        overflow-wrap: anywhere;
+    }
+    .sr-change-facts > td::before {
+        content: attr(data-label);
+        font-weight: 700;
+    }
+    .sr-changes tr.sr-change-detail > td {
+        padding: 8px 0 0;
+    }
+    #region-main .sr-changes tr.sr-change-detail {
+        border-bottom: 1px solid var(--srp-border);
+        margin-bottom: 14px;
+        padding-bottom: 14px;
+    }
+}
+
+@media (max-width: 575.98px) {
+    .sr-change-line {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .sr-change-form .form-control {
+        flex-basis: 100%;
+    }
+    .sr-change-form .btn {
+        flex: 1 1 45%;
+    }
 }
 
 @media (max-width: 767.98px) {

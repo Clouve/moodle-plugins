@@ -37,6 +37,9 @@ if (data_submitted() && confirm_sesskey()) {
 
 echo $OUTPUT->header();
 echo $OUTPUT->heading(get_string('marks_title', $p));
+if (\local_academictranscript\local\srsource::enabled()) {
+    echo $OUTPUT->notification(get_string('scale_usesstudentrecords', $p), 'info');
+}
 echo html_writer::tag('p', get_string('marksintro', $p));
 $all = array_values($DB->get_records('local_academictranscript_mark', null, 'sortorder, id'));
 for ($i = 0; $i < 3; $i++) {

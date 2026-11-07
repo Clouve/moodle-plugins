@@ -348,7 +348,7 @@ final class provider_test extends \core_privacy\tests\provider_testcase {
     public function test_contexts_ignore_users_who_only_acted(): void {
         $staff = $this->getDataGenerator()->create_user();
         [$student, $rows] = $this->make_student($staff, 'S-1001');
-        posting::decide($rows['change'][0], true, 'Approved after the exam was marked again.');
+        $this->decide_as($staff, $rows['change'][0], true, 'Approved after the exam was marked again.');
         $this->assert_acted_by($staff, $rows, true);
 
         $this->assertSame([], provider::get_contexts_for_userid($staff->id)->get_contextids());
@@ -412,7 +412,7 @@ final class provider_test extends \core_privacy\tests\provider_testcase {
     public function test_export_includes_change_requests(): void {
         $staff = $this->getDataGenerator()->create_user();
         [$student, $rows] = $this->make_student($staff, 'S-1001');
-        posting::decide($rows['change'][0], false, 'The gradebook agrees with the posted grade.');
+        $this->decide_as($staff, $rows['change'][0], false, 'The gradebook agrees with the posted grade.');
 
         $this->export_all_data_for_user($student->id, self::COMPONENT);
 
@@ -605,7 +605,7 @@ final class provider_test extends \core_privacy\tests\provider_testcase {
     public function test_delete_data_for_user_keeps_what_the_user_only_acted_on(): void {
         $staff = $this->getDataGenerator()->create_user();
         [, $studentrows] = $this->make_student($staff, 'S-1001');
-        posting::decide($studentrows['change'][0], true, 'Approved after the exam was marked again.');
+        $this->decide_as($staff, $studentrows['change'][0], true, 'Approved after the exam was marked again.');
         $draftrows = ['draft' => [$this->upload_draft($staff)]];
         $this->assert_acted_by($staff, $studentrows, true);
 
@@ -931,6 +931,24 @@ final class provider_test extends \core_privacy\tests\provider_testcase {
 
         $latest = $DB->get_records('local_academictranscript_draft', ['userid' => $uploader->id], 'id DESC', 'id', 0, 1);
         return (int)key($latest);
+    }
+
+    /**
+     * Decide a change request and name the staff member who asked for it as the one who decided it too. Nobody can do that
+     * through the page any more, so another user decides first. A row from an earlier build can still look like this.
+     *
+     * @param \stdClass $staff The user who stays logged in, and is named in the row
+     * @param int $changeid
+     * @param bool $approve
+     * @param string $note
+     */
+    private function decide_as(\stdClass $staff, int $changeid, bool $approve, string $note): void {
+        global $DB;
+
+        $this->setUser($this->getDataGenerator()->create_user());
+        posting::decide($changeid, $approve, $note);
+        $DB->set_field('local_academictranscript_change', 'decidedby', $staff->id, ['id' => $changeid]);
+        $this->setUser($staff);
     }
 
     /**

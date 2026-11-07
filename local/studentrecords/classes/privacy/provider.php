@@ -9,6 +9,7 @@ use core_privacy\local\request\contextlist;
 use core_privacy\local\request\userlist;
 use core_privacy\local\request\writer;
 use local_studentrecords\local\faculty;
+use local_studentrecords\local\payments;
 use local_studentrecords\local\students;
 
 /**
@@ -34,6 +35,8 @@ use local_studentrecords\local\students;
  * - Student documents: deleted.
  * - Self-registration cart, waitlist places and the message log: deleted.
  * - On a faculty record: email, phone, office hours and notes, also in the change history.
+ * - The details of the audit log entries about the person, which can name someone a record was released to: blanked.
+ * - Moodle's rows of the person's online payments, with what the payment provider keeps about them: deleted.
  *
  * It keeps the rest, because a school must:
  * - The permanent academic record, which schools keep for good: legal name, student ID, date of birth, program, terms, status
@@ -42,23 +45,54 @@ use local_studentrecords\local\students;
  * - FERPA records, which must stay with the education record: notice acknowledgments, release authorizations, and letters
  *   issued with what they said and to whom.
  * - The student account, which schools keep as financial and tax records: account lines, online payment requests, refunds
- *   and payment plans. The payment itself is in Moodle's payment system, which handles its own export and deletion.
+ *   and payment plans.
  * - Financial aid awards and aid year details, which federal rules require a school to keep.
  * - Staff names, job details, credentials and qualifications, as the school's staffing record for its accreditor.
- * - The change history and audit log, without the values and IP addresses named above: they show who did what to an
- *   official record.
+ * - The change history and audit log, without the values, details and IP addresses named above: they show who did what to
+ *   an official record.
+ *
+ * Moodle's payment system asks this provider about the plugin's payments through the same methods as a request for the plugin,
+ * with core_payment as the component. A call from the payment system touches the payments and nothing else, so that a request
+ * is not carried out twice. A call for the plugin covers the payments too, because the payment system often never gets here:
+ * in every supported Moodle version, its call to enrol_fee stops with an error on a list that has no course context.
+ * A deletion of a whole context doesn't say who asks, so it runs once for each.
+ *
+ * Some time after an account is deleted, Moodle removes its user context. The person's data here stays, so it is then reported
+ * in the system context, and a request there erases that person by user id and nobody else. On a site with data registry
+ * defaults, Moodle never approves the system context for a deletion: the request ends as deleted and this plugin is not called.
+ * So a scheduled task reads the finished deletion requests and carries those out too.
  *
  * @package    local_studentrecords
  * @copyright  2026 Clouve Inc.
  * @license    https://opensource.org/license/mit MIT
  */
 class provider implements
+    \core_payment\privacy\consumer_provider,
     \core_privacy\local\metadata\provider,
     \core_privacy\local\request\core_userlist_provider,
     \core_privacy\local\request\plugin\provider {
     /** @var string[] The tables of the school's settings, catalog and sections: they only name who last changed a row. */
     const SETTINGS_TABLES = ['level', 'grade', 'minpass', 'policy', 'term', 'course', 'prereq', 'program', 'progcrs', 'reqdoc',
         'offer', 'saprule', 'fee', 'plan', 'refrule', 'meeting', 'export'];
+
+    /** @var string The component on the lists of a call from Moodle's payment system. */
+    const PAYMENTSYSTEM = 'core_payment';
+
+    /** @var array Tables that make a person someone with data here, and the fields that name the person. */
+    const PEOPLE = [
+        'local_studentrecords_student' => ['userid'],
+        'local_studentrecords_faculty' => ['userid'],
+        'local_studentrecords_stathis' => ['userid'],
+        'local_studentrecords_admdec' => ['decidedby'],
+        'local_studentrecords_hold' => ['placedby', 'releasedby'],
+        'local_studentrecords_grchg' => ['requestedby', 'decidedby'],
+        'local_studentrecords_history' => ['userid', 'relateduserid'],
+        'local_studentrecords_log' => ['userid', 'relateduserid'],
+        'local_studentrecords_import' => ['userid'],
+        'local_studentrecords_draft' => ['decidedby'],
+        'local_studentrecords_txn' => ['userid'],
+        'local_studentrecords_msglog' => ['userid'],
+    ];
 
     /**
      * Data stored.
@@ -292,18 +326,56 @@ class provider implements
      */
     protected static function has_data(int $userid): bool {
         global $DB;
-        return $DB->record_exists('local_studentrecords_student', ['userid' => $userid]) ||
-            $DB->record_exists('local_studentrecords_faculty', ['userid' => $userid]) ||
-            $DB->record_exists('local_studentrecords_stathis', ['userid' => $userid]) ||
-            $DB->record_exists('local_studentrecords_admdec', ['decidedby' => $userid]) ||
-            $DB->record_exists_select('local_studentrecords_hold', 'placedby = ? OR releasedby = ?', [$userid, $userid]) ||
-            $DB->record_exists_select('local_studentrecords_grchg', 'requestedby = ? OR decidedby = ?', [$userid, $userid]) ||
-            $DB->record_exists_select('local_studentrecords_history', 'userid = ? OR relateduserid = ?', [$userid, $userid]) ||
-            $DB->record_exists_select('local_studentrecords_log', 'userid = ? OR relateduserid = ?', [$userid, $userid]) ||
-            $DB->record_exists('local_studentrecords_import', ['userid' => $userid]) ||
-            $DB->record_exists('local_studentrecords_draft', ['decidedby' => $userid]) ||
-            $DB->record_exists('local_studentrecords_txn', ['userid' => $userid]) ||
-            $DB->record_exists('local_studentrecords_msglog', ['userid' => $userid]);
+        foreach (self::PEOPLE as $table => $fields) {
+            foreach ($fields as $field) {
+                if ($DB->record_exists($table, [$field => $userid])) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Where a person's data is reported: their user context, or the system context once Moodle removed that with their account.
+     *
+     * @param int $userid
+     * @return \context
+     */
+    protected static function context_of(int $userid): \context {
+        return \context_user::instance($userid, IGNORE_MISSING) ?: \context_system::instance();
+    }
+
+    /**
+     * Whether a context is the one a person's data is reported in.
+     *
+     * @param \context $context
+     * @param int $userid
+     * @return bool
+     */
+    protected static function is_context_of(\context $context, int $userid): bool {
+        return (int)$context->id === (int)self::context_of($userid)->id;
+    }
+
+    /**
+     * The people with data here whose account is deleted and whose user context is gone.
+     *
+     * @return int[] user ids
+     */
+    protected static function removed_accounts(): array {
+        global $DB;
+        $userids = [];
+        foreach (self::PEOPLE as $table => $fields) {
+            foreach ($fields as $field) {
+                $userids = array_merge($userids, $DB->get_fieldset_sql("SELECT DISTINCT u.id
+                                                                          FROM {" . $table . "} t
+                                                                          JOIN {user} u ON u.id = t.$field AND u.deleted = 1
+                                                                     LEFT JOIN {context} c ON c.instanceid = u.id
+                                                                               AND c.contextlevel = ?
+                                                                         WHERE c.id IS NULL", [CONTEXT_USER]));
+            }
+        }
+        return array_values(array_unique(array_map('intval', $userids)));
     }
 
     /**
@@ -315,9 +387,48 @@ class provider implements
     public static function get_contexts_for_userid(int $userid): contextlist {
         $list = new contextlist();
         if (self::has_data($userid)) {
-            $list->add_user_context($userid);
+            if (self::context_of($userid) instanceof \context_user) {
+                $list->add_user_context($userid);
+            } else {
+                $list->add_system_context();
+            }
         }
         return $list;
+    }
+
+    /**
+     * The context of a payment: the user context of the student who started the request, like the rest of their data.
+     *
+     * @param string $paymentarea
+     * @param int $itemid payment request id
+     * @return int|null null when the request or the user context is gone: the payment system then uses the system context
+     */
+    public static function get_contextid_for_payment(string $paymentarea, int $itemid): ?int {
+        global $DB;
+        $id = $DB->get_field_sql("SELECT c.id FROM {" . payments::REQ . "} r
+                                    JOIN {context} c ON c.instanceid = r.userid AND c.contextlevel = ?
+                                   WHERE r.id = ?", [CONTEXT_USER, $itemid]);
+        return $id ? (int)$id : null;
+    }
+
+    /**
+     * The payments of this plugin in a context, as the end of a query on {payments} p: the same answer as
+     * get_contextid_for_payment(), for many payments at once.
+     *
+     * @param \context $context
+     * @return array sql, params
+     */
+    protected static function payments_in(\context $context): array {
+        $params = ['contextuser' => CONTEXT_USER, 'component' => 'local_studentrecords'];
+        $where = 'c.id IS NULL';
+        if (!$context instanceof \context_system) {
+            $where = 'c.id = :contextid';
+            $params['contextid'] = $context->id;
+        }
+        return ["FROM {payments} p
+            LEFT JOIN {" . payments::REQ . "} r ON r.id = p.itemid
+            LEFT JOIN {context} c ON c.instanceid = r.userid AND c.contextlevel = :contextuser
+                WHERE p.component = :component AND $where", $params];
     }
 
     /**
@@ -327,7 +438,12 @@ class provider implements
      */
     public static function get_users_in_context(userlist $userlist) {
         $context = $userlist->get_context();
-        if ($context instanceof \context_user && self::has_data((int)$context->instanceid)) {
+        if ($userlist->get_component() === self::PAYMENTSYSTEM) {
+            [$sql, $params] = self::payments_in($context);
+            $userlist->add_from_sql('userid', "SELECT p.userid $sql", $params);
+        } else if ($context instanceof \context_system) {
+            $userlist->add_users(self::removed_accounts());
+        } else if ($context instanceof \context_user && self::has_data((int)$context->instanceid)) {
             $userlist->add_user((int)$context->instanceid);
         }
     }
@@ -339,9 +455,13 @@ class provider implements
      */
     public static function export_user_data(approved_contextlist $contextlist) {
         global $DB;
+        self::export_payments($contextlist);
+        if ($contextlist->get_component() === self::PAYMENTSYSTEM) {
+            return;
+        }
         $userid = (int)$contextlist->get_user()->id;
         foreach ($contextlist->get_contexts() as $context) {
-            if (!$context instanceof \context_user || (int)$context->instanceid !== $userid) {
+            if (!self::is_context_of($context, $userid)) {
                 continue;
             }
             $base = [get_string('pluginname', 'local_studentrecords')];
@@ -527,14 +647,43 @@ class provider implements
     }
 
     /**
-     * Delete data for everyone in a context (a user context: that user).
+     * Export a user's payments, each in the context it is reported in.
+     *
+     * @param approved_contextlist $contextlist
+     */
+    protected static function export_payments(approved_contextlist $contextlist): void {
+        global $DB;
+        $userid = (int)$contextlist->get_user()->id;
+        foreach ($contextlist->get_contexts() as $context) {
+            [$sql, $params] = self::payments_in($context);
+            $reqids = $DB->get_fieldset_sql("SELECT DISTINCT p.itemid $sql AND p.userid = :payer", $params + ['payer' => $userid]);
+            foreach ($reqids as $reqid) {
+                \core_payment\privacy\provider::export_payment_data_for_user_in_context(
+                    $context,
+                    [get_string('pluginname', 'local_studentrecords')],
+                    $userid,
+                    'local_studentrecords',
+                    payments::AREA,
+                    (int)$reqid
+                );
+            }
+        }
+    }
+
+    /**
+     * Delete data for everyone in a context: a user context is that user, the system context the removed accounts.
      *
      * @param \context $context
      */
     public static function delete_data_for_all_users_in_context(\context $context) {
         if ($context instanceof \context_user) {
-            self::erase((int)$context->instanceid);
+            self::erase((int)$context->instanceid, $context);
+        } else if ($context instanceof \context_system) {
+            foreach (self::removed_accounts() as $userid) {
+                self::erase($userid, $context);
+            }
         }
+        self::erase_payments($context);
     }
 
     /**
@@ -545,8 +694,10 @@ class provider implements
     public static function delete_data_for_user(approved_contextlist $contextlist) {
         $userid = (int)$contextlist->get_user()->id;
         foreach ($contextlist->get_contexts() as $context) {
-            if ($context instanceof \context_user && (int)$context->instanceid === $userid) {
-                self::erase($userid);
+            if ($contextlist->get_component() === self::PAYMENTSYSTEM) {
+                self::erase_payments($context, [$userid]);
+            } else if (self::is_context_of($context, $userid)) {
+                self::erase($userid, $context);
             }
         }
     }
@@ -558,24 +709,89 @@ class provider implements
      */
     public static function delete_data_for_users(approved_userlist $userlist) {
         $context = $userlist->get_context();
-        if ($context instanceof \context_user && in_array((int)$context->instanceid, $userlist->get_userids())) {
-            self::erase((int)$context->instanceid);
+        if ($userlist->get_component() === self::PAYMENTSYSTEM) {
+            self::erase_payments($context, $userlist->get_userids());
+            return;
+        }
+        foreach ($userlist->get_userids() as $userid) {
+            if (self::is_context_of($context, (int)$userid)) {
+                self::erase((int)$userid, $context);
+            }
         }
     }
 
     /**
+     * Carry out the finished deletion requests of removed accounts: a deletion a privacy officer approved, for a person with data
+     * here whose account is deleted and whose user context is gone. Each person is erased by user id, payments included. A mark
+     * in the audit log keeps a request from being carried out twice. Data registry defaults make no difference here.
+     *
+     * @return int people erased
+     */
+    public static function erase_removed_accounts(): int {
+        global $DB;
+        if (!class_exists(\tool_dataprivacy\api::class)) {
+            return 0;
+        }
+        $sql = "SELECT r.id, r.userid
+                  FROM {tool_dataprivacy_request} r
+                  JOIN {user} u ON u.id = r.userid AND u.deleted = 1
+             LEFT JOIN {context} c ON c.instanceid = r.userid AND c.contextlevel = :contextuser
+             LEFT JOIN {local_studentrecords_log} l ON l.relateduserid = r.userid AND l.objectid = r.id
+                       AND l.objecttype = 'datarequest' AND l.action = 'privacyerase'
+                 WHERE r.type = :type AND r.status IN (:complete, :deleted) AND c.id IS NULL AND l.id IS NULL
+              ORDER BY r.id";
+        $api = \tool_dataprivacy\api::class;
+        $requests = $DB->get_records_sql($sql, ['contextuser' => CONTEXT_USER, 'type' => $api::DATAREQUEST_TYPE_DELETE,
+            'complete' => $api::DATAREQUEST_STATUS_COMPLETE, 'deleted' => $api::DATAREQUEST_STATUS_DELETED]);
+        $system = \context_system::instance();
+        $erased = [];
+        foreach ($requests as $request) {
+            $userid = (int)$request->userid;
+            if (!self::has_data($userid)) {
+                continue;
+            }
+            if (!isset($erased[$userid])) {
+                self::erase($userid, $system);
+                $erased[$userid] = true;
+            }
+            \local_studentrecords\local\audit::log('privacyerase', 'datarequest', (int)$request->id, $userid);
+        }
+        return count($erased);
+    }
+
+    /**
      * Remove a person's optional personal data; keep the permanent record (see class comment). All of it happens or
-     * none of it, so a failed request can run again.
+     * none of it, so a failed request can run again. Every deletion of a person comes through here.
      *
      * @param int $userid
+     * @param \context $context the context the person's data is reported in
      */
-    protected static function erase(int $userid): void {
+    protected static function erase(int $userid, \context $context): void {
         global $DB;
         $transaction = $DB->start_delegated_transaction();
         students::erase_personal($userid);
         faculty::erase_personal($userid);
         $DB->delete_records('local_studentrecords_msglog', ['userid' => $userid]);
         $DB->set_field('local_studentrecords_log', 'ip', null, ['userid' => $userid]);
+        $DB->set_field('local_studentrecords_log', 'info', null, ['relateduserid' => $userid]);
+        self::erase_payments($context, [$userid]);
         $transaction->allow_commit();
+    }
+
+    /**
+     * Delete the payments of this plugin in a context, with what the payment provider keeps about them.
+     *
+     * @param \context $context
+     * @param int[]|null $userids only the payments of these users; null = everyone's
+     */
+    protected static function erase_payments(\context $context, ?array $userids = null): void {
+        global $DB;
+        [$sql, $params] = self::payments_in($context);
+        if ($userids !== null) {
+            [$in, $inparams] = $DB->get_in_or_equal($userids, SQL_PARAMS_NAMED, 'payer', true, 0);
+            $sql .= " AND p.userid $in";
+            $params += $inparams;
+        }
+        \core_payment\privacy\provider::delete_data_for_payment_sql("SELECT p.id $sql", $params);
     }
 }

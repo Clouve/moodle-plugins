@@ -2,6 +2,8 @@
 
 namespace local_studentrecords\local;
 
+use local_studentrecords\task\send_message;
+
 #[\PHPUnit\Framework\Attributes\CoversClass(messages::class)]
 /**
  * Tests for automatic messages: placeholders, test mode, and what is really sent.
@@ -22,6 +24,8 @@ final class messages_test extends \advanced_testcase {
     protected function setUp(): void {
         parent::setUp();
         $this->resetAfterTest();
+        // On PostgreSQL a test runs inside a transaction, and a message in a transaction waits for cron.
+        $this->preventResetByRollback();
         $this->setAdminUser();
         $this->generator = $this->getDataGenerator()->get_plugin_generator('local_studentrecords');
         $this->generator->set_settings(['billing' => 1, 'schoolname' => 'Riverside College']);
@@ -82,6 +86,14 @@ final class messages_test extends \advanced_testcase {
         billing::add_line(['studentid' => $student->id, 'txntype' => 'credit', 'amount' => -5000, 'method' => 'adjustment',
             'description' => 'Adjustment']);
         refunds::payout($student, 3.33, 'check');
+
+        $waiting = $DB->get_fieldset_select('task_adhoc', 'customdata', 'classname = ?', ['\\' . send_message::class]);
+        $this->assertNotEmpty($waiting);
+        foreach ($waiting as $job) {
+            $this->assertStringNotContainsString('$', $job);
+            $this->assertDoesNotMatchRegularExpression('/\b\d[\d,]*\.\d\d\b/', $job);
+        }
+        $this->runAdhocTasks(send_message::class);
 
         $sent = $sink->get_messages();
 
@@ -183,6 +195,263 @@ final class messages_test extends \advanced_testcase {
         $this->assertSame(1, $sent);
         $this->assertSame((int)$finance->id, (int)$sink->get_messages()[0]->useridto);
         $this->assertStringNotContainsString('$', $sink->get_messages()[0]->fullmessage);
+    }
+
+    /**
+     * With no transaction open, a message goes at once.
+     */
+    public function test_a_message_with_no_transaction_goes_at_once(): void {
+        global $DB;
+        $sink = $this->redirectMessages();
+        $student = $this->generator->create_user_student();
+
+        $this->assertTrue(messages::student('paymentreceived', $student));
+
+        $this->assertSame(1, $sink->count());
+        $this->assertSame(['sent'], $this->logged('paymentreceived'));
+        $this->assertSame(0, $DB->count_records('task_adhoc', ['classname' => '\\' . send_message::class]));
+    }
+
+    /**
+     * Nothing is sent inside a transaction, and the commit sends nothing: a mail server that hangs would hold up the commit and
+     * any lock around it. The message waits for cron. Until it really goes, the log doesn't say it was sent.
+     */
+    public function test_a_message_in_a_transaction_waits_for_cron(): void {
+        global $DB;
+        $sink = $this->redirectMessages();
+        $student = $this->generator->create_user_student();
+
+        $transaction = $DB->start_delegated_transaction();
+        $this->assertFalse(messages::student('paymentreceived', $student));
+        $transaction->allow_commit();
+
+        $this->assertSame(0, $sink->count());
+        $this->assertSame(['queued'], $this->logged('paymentreceived'));
+
+        $this->runAdhocTasks(send_message::class);
+
+        $this->assertSame(1, $sink->count());
+        $this->assertSame((int)$student->userid, (int)$sink->get_messages()[0]->useridto);
+        $this->assertSame(['sent'], $this->logged('paymentreceived'));
+        $this->assertSame(0, $DB->count_records('task_adhoc', ['classname' => '\\' . send_message::class]));
+    }
+
+    /**
+     * Cron can run a task again, for example after it stopped between sending and finishing. The message goes once: the log row
+     * says it left the queue.
+     */
+    public function test_a_queued_message_goes_once(): void {
+        global $DB;
+        $sink = $this->redirectMessages();
+        $student = $this->generator->create_user_student();
+        $transaction = $DB->start_delegated_transaction();
+        messages::student('paymentreceived', $student);
+        $transaction->allow_commit();
+        $job = json_decode($DB->get_field('task_adhoc', 'customdata', ['classname' => '\\' . send_message::class]));
+
+        messages::send_queued($job);
+        messages::send_queued($job);
+
+        $this->assertSame(1, $sink->count());
+        $this->assertSame(['sent'], $this->logged('paymentreceived'));
+    }
+
+    /**
+     * The status of the newest message of a key for a student, and none when there is no such message.
+     */
+    public function test_last_status(): void {
+        $this->redirectMessages();
+        $student = $this->generator->create_user_student();
+        $this->assertSame('', messages::last_status('aidletter', (int)$student->id));
+
+        $this->generator->set_settings(['msgon_aidletter' => 0]);
+        messages::student('aidletter', $student);
+        $this->generator->set_settings(['msgon_aidletter' => 1]);
+        messages::student('aidletter', $student);
+
+        $this->assertSame('sent', messages::last_status('aidletter', (int)$student->id));
+    }
+
+    /**
+     * A transaction that is rolled back takes its messages with it: nobody hears about work that was not saved.
+     */
+    public function test_a_rollback_drops_the_waiting_message(): void {
+        global $DB;
+        $sink = $this->redirectMessages();
+        $student = $this->generator->create_user_student();
+
+        try {
+            billing::transaction(function () use ($student) {
+                messages::student('paymentreceived', $student);
+                throw new \moodle_exception('err_busy', 'local_studentrecords');
+            });
+            $this->fail('The work stopped, so the transaction ends with the error.');
+        } catch (\moodle_exception $e) {
+            $this->assertSame('err_busy', $e->errorcode);
+        }
+        $this->runAdhocTasks(send_message::class);
+
+        $this->assertSame(0, $sink->count());
+        $this->assertSame([], $this->logged('paymentreceived'));
+        $this->assertSame(0, $DB->count_records('task_adhoc', ['classname' => '\\' . send_message::class]));
+    }
+
+    /**
+     * Each message of a transaction is sent on its own. One that can't be sent doesn't lose the ones after it, the log says
+     * which one failed and who it was for, and the work stays saved.
+     */
+    public function test_a_failed_message_does_not_lose_the_others(): void {
+        global $CFG, $DB;
+        $emails = $this->redirectEmails();
+        unset($CFG->noemailever);
+        $broken = $this->generator->create_user_student();
+        $good = $this->generator->create_user_student();
+        $DB->set_field('user', 'email', '', ['id' => $broken->userid]);
+
+        $transaction = $DB->start_delegated_transaction();
+        messages::student('paymentreceived', $broken);
+        messages::student('paymentreceived', $good);
+        records::commit($transaction);
+        $this->runAdhocTasks(send_message::class);
+        $this->resetDebugging();
+
+        $rows = $DB->get_records(messages::LOG, ['msgkey' => 'paymentreceived'], 'id');
+        $this->assertSame([[(int)$broken->id, 'failed'], [(int)$good->id, 'sent']], array_values(array_map(
+            fn($l) => [(int)$l->studentid, $l->status],
+            $rows
+        )));
+        $this->assertSame([$DB->get_field('user', 'email', ['id' => $good->userid])], array_map(
+            fn($mail) => $mail->to,
+            $emails->get_messages()
+        ));
+        $this->assertFalse($DB->record_exists_select(
+            'local_studentrecords_log',
+            $DB->sql_like('info', '?'),
+            ['after saving: %']
+        ));
+    }
+
+    /**
+     * Test mode is read when the message really goes, so a queued message can't reach a real person after test mode came on.
+     */
+    public function test_test_mode_counts_when_the_message_goes(): void {
+        global $DB;
+        $messagesink = $this->redirectMessages();
+        $emailsink = $this->redirectEmails();
+        $student = $this->generator->create_user_student(['email' => 'real.person@example.net']);
+        $other = $this->generator->create_user_student(['email' => 'other.person@example.net']);
+
+        $transaction = $DB->start_delegated_transaction();
+        messages::student('paymentreceived', $student);
+        $transaction->allow_commit();
+        $this->generator->set_settings(['msgtestmode' => 1]);
+        $this->runAdhocTasks(send_message::class);
+
+        $this->assertSame(['testmode'], $this->logged('paymentreceived'));
+        $this->assertSame(0, $messagesink->count());
+
+        $transaction = $DB->start_delegated_transaction();
+        messages::student('refundpaid', $other);
+        $transaction->allow_commit();
+        $this->generator->set_settings(['msgtestinbox' => 'inbox@example.org']);
+        $this->runAdhocTasks(send_message::class);
+
+        $this->assertSame(['testinbox'], $this->logged('refundpaid'));
+        $this->assertSame(0, $messagesink->count());
+        $this->assertSame('inbox@example.org', $emailsink->get_messages()[0]->to);
+    }
+
+    /**
+     * A queued message goes only if it still may: not once it is switched off or the person's account is gone, and not after a
+     * privacy request removed it from the log.
+     */
+    public function test_a_queued_message_checks_again_when_it_goes(): void {
+        global $DB;
+        $sink = $this->redirectMessages();
+        $off = $this->generator->create_user_student();
+        $gone = $this->generator->create_user_student();
+        $erased = $this->generator->create_user_student();
+
+        $transaction = $DB->start_delegated_transaction();
+        messages::student('paymentreceived', $off);
+        messages::student('refundpaid', $gone);
+        messages::student('holdplaced', $erased);
+        $transaction->allow_commit();
+        $this->generator->set_settings(['msgon_paymentreceived' => 0]);
+        delete_user(\core_user::get_user($gone->userid));
+        $DB->delete_records(messages::LOG, ['studentid' => $erased->id]);
+        $this->runAdhocTasks(send_message::class);
+
+        $this->assertSame(0, $sink->count());
+        $this->assertSame(['off'], $this->logged('paymentreceived'));
+        $this->assertSame(['nouser'], $this->logged('refundpaid'));
+        $this->assertSame([], $this->logged('holdplaced'));
+    }
+
+    /**
+     * Staff messages of a transaction wait too, one for each person.
+     */
+    public function test_staff_messages_in_a_transaction_wait_for_cron(): void {
+        global $DB;
+        $sink = $this->redirectMessages();
+        $student = $this->generator->create_user_student();
+        $roleid = billing::create_finance_role();
+        foreach ([$this->getDataGenerator()->create_user(), $this->getDataGenerator()->create_user()] as $finance) {
+            role_assign($roleid, $finance->id, \context_system::instance()->id);
+        }
+
+        $transaction = $DB->start_delegated_transaction();
+        $url = new \moodle_url('/local/studentrecords/refunds.php', ['id' => 1]);
+        $this->assertSame(0, messages::staff('staffrefund', $student, $url));
+        $transaction->allow_commit();
+
+        $this->assertSame(['queued', 'queued'], $this->logged('staffrefund'));
+        $this->runAdhocTasks(send_message::class);
+        $this->assertSame(2, $sink->count());
+        $this->assertSame(['sent', 'sent'], $this->logged('staffrefund'));
+        $this->assertStringEndsWith('refunds.php?id=1', $sink->get_messages()[0]->contexturl);
+    }
+
+    /**
+     * A message written under any lock waits for cron, whatever kind it is.
+     */
+    public function test_any_message_under_a_lock_waits_for_cron(): void {
+        $this->redirectMessages();
+        $student = $this->generator->create_user_student();
+
+        registration::with_lock('offer1', fn() => messages::student('paymentreceived', $student));
+
+        $this->assertSame(['queued'], $this->logged('paymentreceived'));
+    }
+
+    /**
+     * Grades and seat offers are sent while a lock on a registration or a section is held, with no transaction open. A lock
+     * must not wait on a mail server, so they go through cron.
+     */
+    public function test_messages_sent_under_a_lock_wait_for_cron(): void {
+        $sink = $this->redirectMessages();
+        $student = $this->generator->create_user_student();
+
+        foreach (['gradeposted', 'waitseat'] as $key) {
+            registration::with_lock('reg1', fn() => messages::student($key, $student, ['course' => 'ABC 101']));
+            $this->assertSame(['queued'], $this->logged($key));
+        }
+        $this->assertSame(0, $sink->count());
+
+        $this->runAdhocTasks(send_message::class);
+
+        $this->assertSame(2, $sink->count());
+        $this->assertStringContainsString('ABC 101', $sink->get_messages()[0]->fullmessage);
+        $this->assertSame(['sent'], $this->logged('waitseat'));
+    }
+
+    /**
+     * The message log page names the state of a message that waits for cron.
+     */
+    public function test_every_status_has_a_name(): void {
+        foreach (['queued', 'sent', 'failed', 'off', 'nouser', 'testmode', 'testinbox', 'test'] as $status) {
+            $this->assertTrue(get_string_manager()->string_exists('msgstatus_' . $status, 'local_studentrecords'), $status);
+        }
     }
 
     /**

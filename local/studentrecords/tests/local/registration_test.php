@@ -611,6 +611,28 @@ final class registration_test extends \advanced_testcase {
     }
 
     /**
+     * A caller that holds the lock on one registration can't save on another one, because that lock would end before the
+     * caller's commit. The grade is refused, and the caller can try again.
+     */
+    public function test_teacher_post_stays_on_the_locked_registration(): void {
+        global $DB;
+        $course = $this->getDataGenerator()->create_course();
+        $s = $this->setup_section(['moodlecourseid' => $course->id]);
+        $regid = $s['gen']->create_registration(['studentid' => $s['student']->id, 'offerid' => $s['offer']->id]);
+        $userid = (int)$s['user']->id;
+        $this->setAdminUser();
+
+        $this->assertSame(
+            'err_busy',
+            $this->error_of(fn() => registration::teacher_post($course->id, $userid, 95.0, '', $regid + 1))
+        );
+        $this->assertNull($DB->get_field(registration::REG, 'grade', ['id' => $regid]));
+
+        $this->assertSame('A', registration::teacher_post($course->id, $userid, 95.0, '', $regid));
+        $this->assertSame('A', $DB->get_field(registration::REG, 'grade', ['id' => $regid]));
+    }
+
+    /**
      * With Academic Transcript installed, the repeat rule is its setting, the latest attempt by default. Without it, every
      * attempt counts.
      */
@@ -710,6 +732,59 @@ final class registration_test extends \advanced_testcase {
     }
 
     /**
+     * A drop takes the lock on the registration as well as the section, so a grade saved at the same moment waits for it. A
+     * grade can't land on a dropped course, and a drop can't undo a grade. The order is always section, then registration.
+     */
+    public function test_a_drop_holds_the_lock_on_the_registration(): void {
+        global $CFG, $DB;
+        require_once(__DIR__ . '/../fixtures/recording_lock_factory.php');
+        $this->preventResetByRollback();
+        $this->setAdminUser();
+        $gen = $this->getDataGenerator()->get_plugin_generator('local_studentrecords');
+        $gen->create_scale();
+        $offer = $gen->create_offering(['courseid' => $gen->create_course()->id, 'termid' => $gen->create_term()->id]);
+        $student = $gen->create_user_student();
+        $regid = $gen->create_registration(['studentid' => $student->id, 'offerid' => $offer->id]);
+        $CFG->lock_factory = recording_lock_factory::class;
+        recording_lock_factory::$notes = [];
+        recording_lock_factory::$state = fn() => $DB->is_transaction_started();
+
+        registration::end($regid, 'drop', true, 'Changed plans');
+
+        $notes = array_map(fn($n) => $n[0] . ' ' . $n[1], recording_lock_factory::$notes);
+        $mine = array_values(array_filter($notes, fn($n) => str_contains($n, 'offer' . $offer->id) ||
+            str_contains($n, 'reg' . $regid)));
+        $this->assertSame(['taken offer' . $offer->id, 'taken reg' . $regid, 'released reg' . $regid,
+            'released offer' . $offer->id], $mine);
+    }
+
+    /**
+     * Taking a seat again reuses the row of a dropped registration, so it holds that registration's lock too.
+     */
+    public function test_registering_again_holds_the_lock_on_the_registration(): void {
+        global $CFG, $DB;
+        require_once(__DIR__ . '/../fixtures/recording_lock_factory.php');
+        $this->preventResetByRollback();
+        $this->setAdminUser();
+        $gen = $this->getDataGenerator()->get_plugin_generator('local_studentrecords');
+        $gen->create_scale();
+        $offer = $gen->create_offering(['courseid' => $gen->create_course()->id, 'termid' => $gen->create_term()->id]);
+        $student = $gen->create_user_student();
+        $regid = $gen->create_registration(['studentid' => $student->id, 'offerid' => $offer->id]);
+        registration::end($regid, 'drop', true, 'Changed plans');
+        $CFG->lock_factory = recording_lock_factory::class;
+        recording_lock_factory::$notes = [];
+        recording_lock_factory::$state = fn() => $DB->is_transaction_started();
+
+        registration::add($student, (int)$offer->id, true, 'Back again');
+
+        $notes = array_filter(recording_lock_factory::$notes, fn($n) => $n[0] === 'taken');
+        $taken = array_map(fn($n) => $n[1], array_values($notes));
+        $this->assertContains('reg' . $regid, $taken);
+        $this->assertLessThan(array_search('reg' . $regid, $taken), array_search('offer' . $offer->id, $taken));
+    }
+
+    /**
      * A withdrawal from the retake is no result, even when the scale here has a W row with 0 points. The transcript's calculator
      * decides, so the record and the transcript stay together.
      */
@@ -737,5 +812,97 @@ final class registration_test extends \advanced_testcase {
 
         $this->assertSame(1, substr_count(record_view::render($student), $marker));
         $this->assertSame(1, substr_count(student_sections::academic($student, false), $marker));
+    }
+
+    /**
+     * A section with a registered student graded C, and that student signed in with the rights of a manager.
+     *
+     * @param array $offer more fields of the section
+     * @return array what setup_section() gives, and regid
+     */
+    private function manager_with_a_grade(array $offer = []): array {
+        global $DB;
+        $s = $this->setup_section($offer);
+        $this->setAdminUser();
+        $s['regid'] = $s['gen']->create_registration(['studentid' => $s['student']->id, 'offerid' => $s['offer']->id]);
+        registration::set_grade($s['regid'], 'C', null, 'staff');
+        $role = (int)$DB->get_field('role', 'id', ['shortname' => 'manager']);
+        role_assign($role, $s['user']->id, \context_system::instance()->id);
+        $this->setUser($s['user']);
+        return $s;
+    }
+
+    /**
+     * Nobody sets their own final grade, as staff or as a teacher. The grade stays as it was.
+     *
+     * @dataProvider own_grade_provider
+     * @param string $source
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('own_grade_provider')]
+    public function test_nobody_sets_their_own_grade(string $source): void {
+        global $DB;
+        $s = $this->manager_with_a_grade();
+
+        $this->assertSame('err_gradeown', $this->error_of(fn() => registration::set_grade($s['regid'], 'A', null, $source)));
+
+        $this->assertSame('C', $DB->get_field(registration::REG, 'grade', ['id' => $s['regid']]));
+    }
+
+    /**
+     * Data for test_nobody_sets_their_own_grade.
+     *
+     * @return array
+     */
+    public static function own_grade_provider(): array {
+        return ['staff' => ['staff'], 'teacher' => ['teacher']];
+    }
+
+    /**
+     * Someone else's grade is not affected, and an approved grade change still reaches the student's own registration.
+     */
+    public function test_only_the_student_is_stopped(): void {
+        global $DB;
+        $s = $this->manager_with_a_grade();
+        registration::set_grade($s['regid'], 'B', null, 'change', true);
+        $this->assertSame('B', $DB->get_field(registration::REG, 'grade', ['id' => $s['regid']]));
+
+        $this->setAdminUser();
+        registration::set_grade($s['regid'], 'A', null, 'staff');
+
+        $this->assertSame('A', $DB->get_field(registration::REG, 'grade', ['id' => $s['regid']]));
+    }
+
+    /**
+     * The gradebook is no person setting a grade: pulling a section goes on for a member of staff who is in it.
+     */
+    public function test_a_grade_from_the_gradebook_is_not_stopped(): void {
+        global $DB;
+        $s = $this->manager_with_a_grade();
+        $DB->set_field(registration::REG, 'gradesource', 'moodle', ['id' => $s['regid']]);
+
+        registration::set_grade($s['regid'], 'B', null, 'moodle');
+
+        $this->assertSame('B', $DB->get_field(registration::REG, 'grade', ['id' => $s['regid']]));
+    }
+
+    /**
+     * A teacher who is also the student can't post their own grade: Post final grades says why, and the post is refused.
+     */
+    public function test_a_teacher_does_not_post_their_own_grade(): void {
+        global $DB;
+        $course = $this->getDataGenerator()->create_course();
+        $s = $this->manager_with_a_grade(['moodlecourseid' => $course->id]);
+        $DB->update_record(registration::REG, (object)['id' => $s['regid'], 'status' => 'registered', 'grade' => null,
+            'gradesource' => null]);
+
+        $target = registration::teacher_post_target((int)$course->id, (int)$s['user']->id);
+
+        $this->assertSame('own', $target['state']);
+        $this->assertNotEmpty(get_string('err_teacherpost_own', 'local_studentrecords'));
+        $this->assertSame(
+            'err_teacherpost_own',
+            $this->error_of(fn() => registration::teacher_post((int)$course->id, (int)$s['user']->id, 95.0, 'A'))
+        );
+        $this->assertNull($DB->get_field(registration::REG, 'grade', ['id' => $s['regid']]));
     }
 }

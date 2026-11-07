@@ -4,6 +4,9 @@
  * A student's transcript: view, Unofficial download, Official issue (staff), and My transcript, where students see their
  * own transcript and request an Official one.
  *
+ * Whoever has staff tools here has them on every student's page, their own included. On their own page they also have My
+ * transcript (view=mine), and tabs show which of the two they are in. Without staff tools, My transcript is the whole page.
+ *
  * @package    local_academictranscript
  * @copyright  2026 Clouve Inc.
  * @license    https://opensource.org/license/mit MIT
@@ -69,20 +72,30 @@ if ($action === 'issue') {
             \core\output\notification::NOTIFY_ERROR
         );
     }
-    $issue = transcript::issue($userid, $recipient);
+    $issue = requests::issue_direct($userid, $recipient, $repeated);
+    $issuedurl = new moodle_url($url, ['issued' => $issue->id]);
+    $numbers = ['no' => $issue->transcriptno, 'code' => transcript::format_code($issue->verifycode)];
+    if ($repeated) {
+        \core\notification::info(get_string('issuedrepeat', 'local_academictranscript', $numbers));
+        redirect($issuedurl);
+    }
     redirect(
-        new moodle_url($url, ['issued' => $issue->id]),
-        get_string('issuedok', 'local_academictranscript', ['no' => $issue->transcriptno,
-            'code' => transcript::format_code($issue->verifycode)]),
+        $issuedurl,
+        get_string('issuedok', 'local_academictranscript', $numbers),
         null,
         \core\output\notification::NOTIFY_SUCCESS
     );
 }
 
 $own = (int)$userid === (int)$USER->id;
-$PAGE->set_url($url);
+$at = 'local_academictranscript';
+$twoviews = $own && ($canissue || access::is_admin());
+$mine = $own && (!$twoviews || optional_param('view', '', PARAM_ALPHA) === 'mine');
+// The Student Records menu marks My Transcript by this view in the page address.
+$myurl = new moodle_url($url, ['view' => 'mine']);
+$PAGE->set_url($mine ? $myurl : $url);
 // A student's own transcript has no profile header, so it uses the system context. Staff see the student's user context.
-$PAGE->set_context($own ? context_system::instance() : context_user::instance($userid));
+$PAGE->set_context($mine ? context_system::instance() : context_user::instance($userid));
 $PAGE->set_pagelayout('report');
 $title = get_string('studenttranscript', 'local_academictranscript');
 $PAGE->set_title($title . ': ' . fullname($user));
@@ -94,13 +107,17 @@ if ($own && $action === 'request') {
         'recipient' => optional_param('recipient', '', PARAM_TEXT), 'email' => optional_param('email', '', PARAM_RAW_TRIMMED),
         'address' => optional_param('address', '', PARAM_TEXT), 'timing' => optional_param('timing', 'now', PARAM_ALPHA)];
     try {
-        $requestid = requests::create($userid, $request);
+        $requestid = requests::create($userid, $request, $repeated);
     } catch (moodle_exception $e) {
-        redirect($url, s($e->getMessage()), null, \core\output\notification::NOTIFY_ERROR);
+        redirect($myurl, s($e->getMessage()), null, \core\output\notification::NOTIFY_ERROR);
+    }
+    if ($repeated) {
+        \core\notification::info(get_string('req_saved_repeat', $at));
+        redirect($myurl);
     }
     $charged = $DB->get_field(requests::TABLE, 'charged', ['id' => $requestid]);
     redirect(
-        $url,
+        $myurl,
         get_string($charged ? 'req_saved' : 'req_saved_nocharge', 'local_academictranscript'),
         null,
         \core\output\notification::NOTIFY_SUCCESS
@@ -110,8 +127,10 @@ if ($own && $action === 'request') {
 $data = transcript::build($userid);
 logger::log('view', $userid);
 
-if ($own) {
-    $at = 'local_academictranscript';
+$viewtabs = fn(string $current) => $twoviews ? $OUTPUT->tabtree([new tabobject('staff', $url, get_string('view_staff', $at)),
+    new tabobject('mine', $myurl, get_string('mytranscript_title', $at))], $current) : '';
+
+if ($mine) {
     $PAGE->set_pagelayout('standard');
     $PAGE->set_heading(get_string('mytranscript_title', $at));
     $PAGE->navbar->ignore_active();
@@ -119,11 +138,12 @@ if ($own) {
     if ($srshell) {
         $PAGE->navbar->add(get_string('pluginname', 'local_studentrecords'), new moodle_url('/local/studentrecords/index.php'));
     }
-    $PAGE->navbar->add(get_string('mytranscript_title', $at), $url);
+    $PAGE->navbar->add(get_string('mytranscript_title', $at), $myurl);
     echo $OUTPUT->header();
     if ($srshell) {
         echo \local_studentrecords\local\shell::inline_menu();
     }
+    echo $viewtabs('mine');
     $left = html_writer::div(html_view::transcript($data), 'sr-card at-preview', ['tabindex' => 0, 'role' => 'region',
         'aria-label' => get_string('mytranscript_preview', $at)]);
     $left .= html_writer::div(html_writer::link(
@@ -140,6 +160,7 @@ if ($own) {
 
 echo $OUTPUT->header();
 echo $OUTPUT->heading($title . ': ' . fullname($user));
+echo $viewtabs('staff');
 if (
     !get_config('local_academictranscript', 'setupcomplete') && has_capability(
         'local/academictranscript:configure',
@@ -189,7 +210,9 @@ echo html_writer::end_div();
 if ($canissue) {
     echo $OUTPUT->heading(get_string('issueofficial', 'local_academictranscript'), 4);
     $holds = requests::holds($userid);
-    if ($holds) {
+    if ($own) {
+        echo html_writer::div(get_string('issueown', 'local_academictranscript'), 'text-muted mb-3');
+    } else if ($holds) {
         echo html_writer::div(get_string('issueonhold', 'local_academictranscript', s(implode('; ', $holds))), 'text-muted mb-3');
     } else if ($data['problems']) {
         echo html_writer::div(get_string('cannotissueyet', 'local_academictranscript'), 'text-muted mb-3');
@@ -236,5 +259,5 @@ if ($canissue) {
 }
 
 echo $OUTPUT->heading(get_string('transcriptkey', 'local_academictranscript'), 4);
-echo html_view::scale_table();
+echo html_view::scale_table(transcript::key_rows($data));
 echo $OUTPUT->footer();

@@ -55,8 +55,9 @@ Every plugin runs on the same combinations. A plugin that supports other version
 - Check the user's capability on every page, and the sesskey on every action that changes data. Use placeholders in every SQL query.
 - Store the names of courses, programs and marks as plain text, and escape them once, where they are shown. In Academic Transcript, `local\text::plain()` makes the plain text.
 - Don't rename a component, a page, a table, a capability, a setting or a course field short name. Sites keep data under those names, and the address of the verify page is printed on every Official transcript.
-- Keep bundled third-party code as upstream ships it. Declare it in `thirdpartylibs.xml` and describe it in a `readme_moodle.txt` next to it.
+- Keep bundled third-party code as upstream ships it. Declare it in `thirdpartylibs.xml` and describe it in a `readme_moodle.txt` next to it. The transcript fonts are the one exception: their license reserves the upstream name, so they are renamed, and their readme says how.
 - A plugin stays optional for the others. Check that a sibling is installed before you call it, and keep the plugin working without it.
+- Commit a transaction after its `try` block, with `records::commit()` in Student Records and `logger::commit()` in Academic Transcript. Moodle sends held-back messages during the commit, so a failed send comes after the data is saved and must not reach the `catch`.
 
 ## Tests
 

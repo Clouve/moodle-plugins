@@ -4,7 +4,8 @@ namespace local_studentrecords\local;
 
 /**
  * Degree audit: a student's courses and transfer credit against the program outline (required groups, one track,
- * electives), the program's total hours and minimum GPA. The comparison needs no database (evaluate()).
+ * electives), the program's total hours and minimum GPA. A program with no outline is audited on its hours and GPA alone,
+ * and with neither of those either it has nothing to audit. The comparison needs no database (evaluate()).
  *
  * @package    local_studentrecords
  * @copyright  2026 Clouve Inc.
@@ -27,7 +28,8 @@ class degreeaudit {
      *
      * @param array $outline rows: courseid, code, title, hours, groupname, requirement (required, track, elective)
      * @param array $results courseid => [state (met, inprogress, notpassed), letter, term, source (course, transfer)]
-     * @param float $extrahours transfer credit toward the program without an equivalent course in the outline
+     * @param float $extrahours hours that fit no course of the outline: transfer credit toward the program without an
+     *     equivalent course and, with no outline, the credits earned at the school
      * @param array $program totalhours, mingpa
      * @param float|null $gpa cumulative GPA
      * @return array groups, track (chosen group name or ''), earned, inprogress, totalhours, gpa, gpaok, hoursok,
@@ -147,6 +149,9 @@ class degreeaudit {
      */
     public static function add_substitution(\stdClass $student, int $reqcourseid, int $subcourseid, string $note): int {
         global $DB, $USER;
+        if (access::is_own($student)) {
+            throw new \moodle_exception('err_ownrecord', 'local_studentrecords');
+        }
         if (
             $reqcourseid === $subcourseid || trim($note) === '' ||
                 !$DB->record_exists('local_studentrecords_course', ['id' => $reqcourseid]) ||
@@ -166,7 +171,7 @@ class degreeaudit {
      * The degree audit of a student in their program (null when no program).
      *
      * @param \stdClass $student
-     * @return array|null result of evaluate() plus program code and name
+     * @return array|null result of evaluate() plus auditable, atschool, residentneeded, completeifpassed, program code and name
      */
     public static function run(\stdClass $student): ?array {
         global $DB;
@@ -197,7 +202,8 @@ class degreeaudit {
                     $put((int)$r->courseid, ['state' => $r->passed === false ? 'notpassed' : 'met', 'letter' => $r->letter,
                         'term' => $t['term'], 'source' => 'course']);
                 } else if ($r->status === 'registered') {
-                    $put((int)$r->courseid, ['state' => 'inprogress', 'letter' => '', 'term' => $t['term'], 'source' => 'course']);
+                    $put((int)$r->courseid, ['state' => 'inprogress', 'letter' => '', 'term' => $t['term'], 'source' => 'course',
+                        'hours' => (float)$r->hours, 'unittype' => $r->unittype]);
                 }
             }
         }
@@ -208,6 +214,20 @@ class degreeaudit {
                 $put((int)$sub->reqcourseid, ['source' => 'subst'] + $results[(int)$sub->subcourseid]);
             }
         }
+        // With no outline there is no course to match: courses in the program's unit count, each of them once.
+        $unitrows = array_filter(
+            array_merge(...array_column($history['terms'], 'rows')),
+            fn($r) => $r->unittype === $program->unittype
+        );
+        $counted = [];
+        foreach ($unitrows as $r) {
+            if (($results[(int)$r->courseid]['state'] ?? '') === 'met') {
+                $counted[(int)$r->courseid] = (float)$r->hours;
+            }
+        }
+        // Credits earned at the school (not transfer credit), for a program minimum and a program with no outline.
+        $atschool = $outline ? round((float)$history['cumulative']['earned'] - (float)$history['transfertotals']['earned'], 2) :
+            round(array_sum($counted), 2);
         $extra = 0.0;
         foreach ($history['transfers'] as $x) {
             if (!$x->countsprogram) {
@@ -215,25 +235,42 @@ class degreeaudit {
             }
             if ($x->equivcourseid && isset($incoutline[(int)$x->equivcourseid])) {
                 $put((int)$x->equivcourseid, ['state' => 'met', 'letter' => $x->letter, 'term' => '', 'source' => 'transfer']);
-            } else {
+            } else if ($outline || !$x->equivcourseid || !isset($counted[(int)$x->equivcourseid])) {
                 $extra += (float)$x->credits;
+                $counted[(int)$x->equivcourseid] = (float)$x->credits;
             }
         }
+        $pendinghours = 0.0;
+        if (!$outline) {
+            $extra = round($extra + $atschool, 2);
+            $pending = array_filter(
+                $results,
+                fn($r, $id) => $r['state'] === 'inprogress' && $r['unittype'] === $program->unittype && !isset($counted[$id]),
+                ARRAY_FILTER_USE_BOTH
+            );
+            $pendinghours = (float)array_sum(array_column($pending, 'hours'));
+        }
         $result = self::evaluate($outline, $results, $extra, (array)$program, $history['cumulative']['gpa']);
+        $result['inprogress'] += $pendinghours;
         // If the classes in progress are passed: for a conditional graduation approval.
         $passed = array_map(fn($r) => $r['state'] === 'inprogress' ? ['state' => 'met'] + $r : $r, $results);
-        $ifpassed = self::evaluate($outline, $passed, $extra, (array)$program, $history['cumulative']['gpa']);
-        // Credits earned at the school (not transfer credit), when the program sets a minimum.
-        $atschool = round((float)$history['cumulative']['earned'] - (float)$history['transfertotals']['earned'], 2);
+        $ifpassed = self::evaluate($outline, $passed, $extra + $pendinghours, (array)$program, $history['cumulative']['gpa']);
         $resident = self::resident_check($atschool, $result['inprogress'], $program->residenthours !== null ?
             (float)$program->residenthours : null);
         if (!$resident['ok']) {
             $result['missing'][] = ['audit_resident', ['have' => $atschool, 'need' => (float)$program->residenthours]];
             $result['complete'] = false;
         }
+        // No course list, no total hours and no minimum GPA: nothing says what the student has to do.
+        $auditable = $outline || (float)$program->totalhours > 0 || $program->mingpa !== null;
+        if (!$auditable) {
+            $result['missing'][] = ['audit_nothingtocheck', ''];
+            $result['complete'] = false;
+        }
+        $result['auditable'] = (bool)$auditable;
         $result['atschool'] = $atschool;
         $result['residentneeded'] = $program->residenthours !== null ? (float)$program->residenthours : null;
-        $result['completeifpassed'] = $ifpassed['complete'] && $resident['okifpassed'];
+        $result['completeifpassed'] = $auditable && $ifpassed['complete'] && $resident['okifpassed'];
         return $result + ['programcode' => $program->code, 'programname' => format_string($program->name),
             'credential' => (string)$program->credential, 'unittype' => $program->unittype];
     }

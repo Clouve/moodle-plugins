@@ -559,4 +559,21 @@ final class transcript_test extends \advanced_testcase {
         $this->assertNull(transcript::stored('not json'));
         $this->assertNull(transcript::stored(''));
     }
+
+    /**
+     * Nobody issues their own Official transcript, by any path: the rule is in the method every path goes through.
+     */
+    public function test_nobody_issues_their_own_transcript(): void {
+        global $DB;
+        $user = $this->getDataGenerator()->create_user();
+        $this->setUser($user);
+
+        try {
+            transcript::issue($user->id, 'Office');
+            $this->fail('A person issued their own transcript.');
+        } catch (\moodle_exception $e) {
+            $this->assertSame('issueown', $e->errorcode);
+        }
+        $this->assertSame(0, $DB->count_records('local_academictranscript_issue'));
+    }
 }

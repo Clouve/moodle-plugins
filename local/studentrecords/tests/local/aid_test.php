@@ -123,6 +123,50 @@ final class aid_test extends \advanced_testcase {
     }
 
     /**
+     * The lines of an award year: newest first, with the reversals, and no lines of other years or other students.
+     */
+    public function test_lines(): void {
+        $this->preventResetByRollback();
+        $student = $this->generator->create_user_student();
+        $award = $this->award($student, 1000);
+        $first = aid::disburse($award, 600, time() - DAYSECS);
+        $second = aid::disburse($award, 100, time());
+        $reversal = billing::reverse($first, 'Not eligible');
+        $other = aid::save_award($student, ['awardyear' => '2030-31', 'fund' => 'state', 'amount' => 50, 'status' => 'accepted']);
+        aid::disburse($other, 50, time());
+        $classmate = $this->generator->create_user_student();
+        aid::disburse($this->award($classmate, 300), 300, time());
+
+        $lines = aid::lines((int)$student->id, '2029-30');
+
+        $this->assertSame([$reversal, $second, $first], array_map('intval', array_keys($lines)));
+    }
+
+    /**
+     * A return of aid has no award of its own: it belongs to the award year of its term. Its charge is on the list of that year
+     * and of no other, and the charge of an ordinary refund is on no list.
+     */
+    public function test_lines_hold_the_charge_of_a_return_of_aid(): void {
+        global $DB;
+        $this->preventResetByRollback();
+        $student = $this->generator->create_user_student();
+        $award = $this->award($student, 1000);
+        $termid = (int)$DB->get_field(aid::AWARDS, 'termid', ['id' => $award]);
+        aid::save_award($student, ['awardyear' => '2030-31', 'fund' => 'state', 'amount' => 50, 'status' => 'accepted',
+            'termid' => (int)$this->generator->create_term()->id]);
+        $refund = fn(string $reason) => (int)$DB->insert_record(refunds::REFUNDS, (object)['studentid' => $student->id,
+            'termid' => $termid, 'reason' => $reason, 'eventdate' => time(), 'details' => '[]', 'amount' => 500,
+            'status' => 'approved', 'userid' => 2, 'timecreated' => time(), 'timemodified' => time()]);
+        $returned = billing::add_line(['studentid' => $student->id, 'txntype' => 'charge', 'amount' => 500, 'termid' => $termid,
+            'refundid' => $refund('aidreturn'), 'description' => 'Federal aid returned']);
+        billing::add_line(['studentid' => $student->id, 'txntype' => 'charge', 'amount' => 100, 'termid' => $termid,
+            'refundid' => $refund('dropped'), 'description' => 'Charge']);
+
+        $this->assertSame([$returned], array_map('intval', array_keys(aid::lines((int)$student->id, '2029-30'))));
+        $this->assertSame([], aid::lines((int)$student->id, '2030-31'));
+    }
+
+    /**
      * Only accepted awards are disbursed, and only by Financial Aid staff.
      */
     public function test_disburse_needs_an_accepted_award_and_manageaid(): void {

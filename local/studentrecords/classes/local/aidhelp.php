@@ -290,6 +290,26 @@ class aidhelp {
     }
 
     /**
+     * Send the message about the award letter, and say what really happened to it. The message can be switched off, or wait for
+     * cron, or be kept from a real person by test mode, so only a message that went to the student counts as sent.
+     *
+     * @param \stdClass $student
+     * @param string $awardyear
+     * @return array text for staff, and the kind of notice for it
+     */
+    public static function send_letter(\stdClass $student, string $awardyear): array {
+        $p = 'local_studentrecords';
+        messages::student('aidletter', $student, ['term' => $awardyear]);
+        $status = messages::last_status('aidletter', (int)$student->id);
+        audit::log('update', 'aid', (int)$student->id, (int)$student->userid, 'award letter ' . $awardyear . ': ' . $status);
+        if ($status === 'sent') {
+            return [get_string('aid_lettersent', $p), \core\output\notification::NOTIFY_SUCCESS];
+        }
+        return [get_string('aid_letternotsent', $p, get_string('msgstatus_' . $status, $p)),
+            \core\output\notification::NOTIFY_WARNING];
+    }
+
+    /**
      * Save aid year details (Financial Aid staff; change history kept).
      *
      * @param \stdClass $student

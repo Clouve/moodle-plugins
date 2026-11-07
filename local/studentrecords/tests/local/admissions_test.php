@@ -13,7 +13,15 @@ namespace local_studentrecords\local;
  * @license    https://opensource.org/license/mit MIT
  * @covers     \local_studentrecords\local\admissions
  */
-final class admissions_test extends \basic_testcase {
+final class admissions_test extends \advanced_testcase {
+    /**
+     * Start each test with a clean site.
+     */
+    protected function setUp(): void {
+        parent::setUp();
+        $this->resetAfterTest();
+    }
+
     /**
      * Student IDs: RVC-2026-0001 style, the next number after the ones in use in the same format.
      */
@@ -74,5 +82,56 @@ final class admissions_test extends \basic_testcase {
         $this->assertSame('twoormore', admissions::ipeds_category('notreported', 'asian,white', false));
         $this->assertSame('unknown', admissions::ipeds_category(null, 'notreported', false));
         $this->assertSame('unknown', admissions::ipeds_category(null, null, false));
+    }
+
+    /**
+     * An applicant who is signed in with the rights of a manager, and the data of a decision.
+     *
+     * @return array student, decision
+     */
+    private function applicant_who_is_staff(): array {
+        global $DB;
+        $this->setAdminUser();
+        $gen = $this->getDataGenerator()->get_plugin_generator('local_studentrecords');
+        $student = $gen->create_user_student(['status' => 'applicant']);
+        $role = (int)$DB->get_field('role', 'id', ['shortname' => 'manager']);
+        role_assign($role, (int)$student->userid, \context_system::instance()->id);
+        $this->setUser((int)$student->userid);
+        return ['student' => $student, 'decision' => ['decision' => 'admitted', 'decisiondate' => time(), 'reason' => '',
+            'conditions' => '']];
+    }
+
+    /**
+     * Nobody records an admission decision on their own record: it writes the decision and moves the status.
+     */
+    public function test_nobody_decides_their_own_admission(): void {
+        global $DB;
+        $s = $this->applicant_who_is_staff();
+
+        try {
+            admissions::record_decision($s['student'], $s['decision']);
+            $this->fail('A person admitted themselves.');
+        } catch (\moodle_exception $e) {
+            $this->assertSame('err_ownrecord', $e->errorcode);
+        }
+
+        $this->assertSame(0, $DB->count_records('local_studentrecords_admdec'));
+        $this->assertSame('applicant', students::get((int)$s['student']->id)->status);
+    }
+
+    /**
+     * The status of one's own record doesn't move by any other way either.
+     */
+    public function test_nobody_sets_their_own_status(): void {
+        $s = $this->applicant_who_is_staff();
+
+        try {
+            admissions::set_status((int)$s['student']->id, 'graduated', time());
+            $this->fail('A person set their own status.');
+        } catch (\moodle_exception $e) {
+            $this->assertSame('err_ownrecord', $e->errorcode);
+        }
+
+        $this->assertSame('applicant', students::get((int)$s['student']->id)->status);
     }
 }

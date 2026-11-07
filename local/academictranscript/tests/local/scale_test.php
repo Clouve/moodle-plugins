@@ -210,6 +210,28 @@ final class scale_test extends \advanced_testcase {
     }
 
     /**
+     * Hours and grade points print with one decimal, and with two when the value has them, so nothing is rounded away.
+     *
+     * @dataProvider number_provider
+     * @param float $value
+     * @param string $expected
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('number_provider')]
+    public function test_a_number_keeps_the_decimals_it_has(float $value, string $expected): void {
+        $this->assertSame($expected, scale::number($value));
+    }
+
+    /**
+     * Values and how they print.
+     *
+     * @return array
+     */
+    public static function number_provider(): array {
+        return ['whole' => [3.0, '3.0'], 'one decimal' => [2.5, '2.5'], 'two decimals' => [5.25, '5.25'], 'zero' => [0.0, '0.0'],
+            'rounds up in one decimal' => [3.58, '3.58'], 'thousands' => [1234.5, '1,234.5'], 'thirds' => [3.67, '3.67']];
+    }
+
+    /**
      * The transcript key gives each description once, over the grades that share it, and then one row for each mark.
      */
     public function test_scale_rows_merge_equal_descriptions(): void {

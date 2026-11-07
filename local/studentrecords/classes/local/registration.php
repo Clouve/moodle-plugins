@@ -162,7 +162,11 @@ class registration {
                     'group' => (string)$r->termid, 'order' => $order[(int)$r->termid], 'time' => (int)$r->timeregistered];
             }
         }
-        $result = \local_academictranscript\local\scale::calculator()->compute($attempts);
+        $source = '\\local_academictranscript\\local\\srsource';
+        // An older Academic Transcript has its own scale only.
+        $calculator = method_exists($source, 'calculator') ? $source::calculator() :
+            \local_academictranscript\local\scale::calculator();
+        $result = $calculator->compute($attempts);
         foreach ($result['attempts'] as $key => $attempt) {
             $rows[$key]->repeatexcluded = $attempt['excluded'];
         }
@@ -193,6 +197,15 @@ class registration {
             unset(self::$locks[$resource]);
             $lock->release();
         }
+    }
+
+    /**
+     * Whether this request holds a lock, so nothing slow may run now: a mail server that hangs would hold the lock with it.
+     *
+     * @return bool
+     */
+    public static function holds_lock(): bool {
+        return (bool)self::$locks;
     }
 
     // Offerings.
@@ -477,7 +490,13 @@ class registration {
      * @throws \moodle_exception when there are problems and no override
      */
     public static function add(\stdClass $student, int $offerid, bool $override = false, string $note = ''): int {
-        return self::with_lock('offer' . $offerid, fn() => self::add_seat($student, $offerid, $override, $note));
+        return self::with_lock('offer' . $offerid, function () use ($student, $offerid, $override, $note) {
+            global $DB;
+            // Taking a seat again reuses the row of a dropped registration, and a grade can't be saved on it meanwhile.
+            $regid = (int)$DB->get_field(self::REG, 'id', ['studentid' => $student->id, 'offerid' => $offerid]);
+            $add = fn() => self::add_seat($student, $offerid, $override, $note);
+            return $regid ? self::with_lock('reg' . $regid, $add) : $add();
+        });
     }
 
     /**
@@ -524,11 +543,11 @@ class registration {
             waitlist::registered((int)$student->id, $offerid);
             $DB->delete_records(selfreg::CART, ['studentid' => $student->id, 'offerid' => $offerid]);
             messages::student('regadded', $student, ['course' => $offer->code, 'term' => $offer->termname]);
-            $transaction->allow_commit();
         } catch (\Throwable $e) {
             // The callers show the error and carry on, so the transaction must end here.
             $transaction->rollback($e);
         }
+        records::commit($transaction, $student);
         return $id;
     }
 
@@ -544,7 +563,12 @@ class registration {
     public static function end(int $regid, string $action, bool $override = false, string $note = ''): void {
         global $DB;
         $offerid = (int)$DB->get_field(self::REG, 'offerid', ['id' => $regid], MUST_EXIST);
-        self::with_lock('offer' . $offerid, fn() => self::end_seat($regid, $action, $override, $note));
+        // The lock on the section keeps the seats right, and the lock on the registration keeps a grade from landing on a
+        // course that is being dropped. Always section first, then registration.
+        self::with_lock('offer' . $offerid, fn() => self::with_lock(
+            'reg' . $regid,
+            fn() => self::end_seat($regid, $action, $override, $note)
+        ));
     }
 
     /**
@@ -597,11 +621,11 @@ class registration {
             messages::student($action === 'drop' ? 'regdropped' : 'regwithdrawn', $student, ['course' => $offer->code,
                 'term' => $offer->termname]);
             waitlist::seat_opened((int)$offer->id);
-            $transaction->allow_commit();
         } catch (\Throwable $e) {
             // The callers show the error and carry on, so the transaction must end here.
             $transaction->rollback($e);
         }
+        records::commit($transaction, $student);
     }
 
     /**
@@ -737,6 +761,11 @@ class registration {
         if (!in_array($reg->status, self::ACTIVE, true)) {
             throw new \moodle_exception('err_gradenotactive', 'local_studentrecords');
         }
+        $student = students::get((int)$reg->studentid);
+        // Nobody sets their own grade. An approved grade change comes through another person, and the gradebook is no person.
+        if (in_array($source, ['staff', 'teacher'], true) && access::is_own($student)) {
+            throw new \moodle_exception('err_gradeown', 'local_studentrecords');
+        }
         if (!$viachange) {
             if (self::frozen((int)$reg->offerid)) {
                 throw new \moodle_exception('err_frozen', 'local_studentrecords');
@@ -746,7 +775,6 @@ class registration {
                 throw new \moodle_exception('err_gradekept', 'local_studentrecords');
             }
         }
-        $student = students::get((int)$reg->studentid);
         // The column keeps four decimals. The letter was chosen from the exact percentage before this.
         records::save(self::REG, ['id' => $regid, 'status' => 'completed', 'grade' => $letter,
             'gradepct' => $pct === null ? null : round($pct, 4), 'gradesource' => $source], 'form', (int)$student->userid);
@@ -804,7 +832,7 @@ class registration {
      *
      * @param int $moodlecourseid
      * @param int $userid
-     * @return array ['state' => norecord (no Student Records file, nothing to do) | noreg | several | kept | frozen | ok,
+     * @return array ['state' => norecord (no Student Records file, nothing to do) | noreg | several | own | kept | frozen | ok,
      *     'regid' => int, 'grade' => current letter or '', 'freeze' => Y-m-d or '']
      */
     public static function teacher_post_target(int $moodlecourseid, int $userid): array {
@@ -832,7 +860,9 @@ class registration {
         $out['regid'] = (int)$reg->id;
         $out['grade'] = (string)$reg->grade;
         $out['freeze'] = $reg->gradefreeze ? catalog::time_to_date((int)$reg->gradefreeze) : '';
-        if (in_array($reg->gradesource, ['staff', 'change'], true)) {
+        if (access::is_own($student)) {
+            $out['state'] = 'own';
+        } else if (in_array($reg->gradesource, ['staff', 'change'], true)) {
             $out['state'] = 'kept';
         } else if ($reg->gradesource === 'teacher') {
             // Already posted. A course that runs again needs a new registration, or a finished attempt would be replaced.
@@ -868,13 +898,25 @@ class registration {
      * @param int $userid
      * @param float|null $pct course total percentage, or null for a hand-entered letter
      * @param string $letter hand-entered letter (used when $pct is null)
+     * @param int|null $lockedregid for a caller with its own transaction: the registration whose lock it holds through its
+     *     commit. See with_lock(). A lock taken here would end before that commit, so a grade for any other registration is
+     *     refused, and the caller can try again.
      * @return string the letter saved
      * @throws \moodle_exception when the grade cannot be saved
      */
-    public static function teacher_post(int $moodlecourseid, int $userid, ?float $pct, string $letter): string {
+    public static function teacher_post(
+        int $moodlecourseid,
+        int $userid,
+        ?float $pct,
+        string $letter,
+        ?int $lockedregid = null
+    ): string {
         $target = self::teacher_post_target($moodlecourseid, $userid);
         if ($target['state'] !== 'ok') {
             throw new \moodle_exception('err_teacherpost_' . $target['state'], 'local_studentrecords', '', (object)$target);
+        }
+        if ($lockedregid !== null && $target['regid'] !== $lockedregid) {
+            throw new \moodle_exception('err_busy', 'local_studentrecords');
         }
         $grade = self::teacher_letter($pct, $letter);
         if ($grade === null) {

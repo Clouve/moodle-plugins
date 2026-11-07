@@ -27,16 +27,20 @@ final class upgrade_test extends \advanced_testcase {
         $this->resetAfterTest();
         $this->preventResetByRollback();
         $dbman = $DB->get_manager();
-        $wanted = ['local_studentrecords_history' => ['userid'], 'local_studentrecords_txn' => ['reverses', 'chargeid', 'aidid']];
+        $wanted = ['local_studentrecords_history' => ['userid'],
+            'local_studentrecords_txn' => ['reverses', 'chargeid', 'aidid', 'paymentid']];
         foreach ($wanted as $tablename => $fields) {
             foreach ($fields as $field) {
-                $dbman->drop_index(
-                    new \xmldb_table($tablename),
-                    new \xmldb_index($field, XMLDB_INDEX_NOTUNIQUE, [$field])
-                );
+                $table = new \xmldb_table($tablename);
+                $index = new \xmldb_index($field, XMLDB_INDEX_NOTUNIQUE, [$field]);
+                if ($dbman->index_exists($table, $index)) {
+                    $dbman->drop_index($table, $index);
+                }
             }
         }
         set_config('version', 2026111606, 'local_studentrecords');
+        unset_config('recoverfrom', 'local_studentrecords');
+        $before = time();
 
         $this->assertTrue(xmldb_local_studentrecords_upgrade(2026111606));
 
@@ -47,6 +51,28 @@ final class upgrade_test extends \advanced_testcase {
             }
         }
         $this->assertEquals(2026111607, get_config('local_studentrecords', 'version'));
+        // The recovery of lost payments starts at the upgrade, so it never looks at the site's history. A second run keeps the
+        // time.
+        $this->assertGreaterThanOrEqual($before, (int)get_config('local_studentrecords', 'recoverfrom'));
+        set_config('recoverfrom', 12345, 'local_studentrecords');
+        set_config('version', 2026111606, 'local_studentrecords');
+        $this->assertTrue(xmldb_local_studentrecords_upgrade(2026111606));
+        $this->assertEquals(12345, get_config('local_studentrecords', 'recoverfrom'));
+    }
+
+    /**
+     * A new site starts the recovery of lost payments when it is installed.
+     */
+    public function test_install_sets_the_start_of_the_recovery(): void {
+        global $CFG;
+        require_once($CFG->dirroot . '/local/studentrecords/db/install.php');
+        $this->resetAfterTest();
+        unset_config('recoverfrom', 'local_studentrecords');
+        $before = time();
+
+        $this->assertTrue(xmldb_local_studentrecords_install());
+
+        $this->assertGreaterThanOrEqual($before, (int)get_config('local_studentrecords', 'recoverfrom'));
     }
 
     /**

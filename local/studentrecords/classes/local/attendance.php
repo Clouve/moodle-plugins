@@ -233,11 +233,11 @@ class attendance {
                         'term' => $offer->termname]);
                 }
             }
-            $transaction->allow_commit();
         } catch (\Throwable $e) {
             // The page shows the error and carries on, so the transaction must end here.
             $transaction->rollback($e);
         }
+        records::commit($transaction);
         return $n;
     }
 

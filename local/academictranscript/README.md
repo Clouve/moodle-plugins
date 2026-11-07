@@ -6,7 +6,7 @@ Academic Transcript (`local_academictranscript`) is a Moodle plugin for Moodle 4
 
 ## What it does
 
-- Students see their own transcript on My transcript and download an Unofficial copy, a PDF with an unofficial watermark. They can also request an Official transcript there: by email, by mail or for pick up, right away or after grades or the degree.
+- Students see their own transcript on My transcript and download an Unofficial copy, a PDF with an unofficial watermark. They can also request an Official transcript there: by email, by mail or for pick up. With Student Records as the source, they can ask for it right away or after grades or the degree.
 - The registrar works through those requests on the Transcript requests page.
 - Teachers and managers issue Official transcripts for a named recipient (the "Issued To" field is required). Each Official transcript gets a transcript number and a 24-character verification code, is frozen as issued, and is digitally signed.
 - Anyone can check a code on the public verify page, or scan the QR code on an Official transcript. The page confirms the student, the date, the degree or program and who it was sent to. It shows no grades and no date of birth.
@@ -77,8 +77,8 @@ Moodle 4.5 creates the Local plugins category only for site administrators. On M
 
 1. An admin adds the term on the Terms page and sets each course's Course code, Hours and Term.
 2. Teachers grade in the Moodle gradebook as usual. For a student who gets P, NP, I, NC or W, the teacher opens More > Transcript codes and enters the code and a reason. The reason is kept for the record and is not printed.
-3. When the term is over, a teacher opens More > Post final grades, selects the students and selects "Post selected". Each posted grade is locked.
-4. To change a posted grade, a teacher selects "Request change" and gives a reason. An admin approves or rejects the change on the Grade change approvals page.
+3. When the term is over, a teacher opens More > Post final grades, selects the students and selects "Post selected". Each posted grade is locked. Nobody can post their own final grade: their row says why and has no box.
+4. To change a posted grade, a teacher selects "Request change" and gives a reason. An admin approves or rejects the change on the Grade change approvals page. Nobody can approve or reject a change they asked for, or a change to their own grade. Grade change approvals shows why in place of the buttons.
 5. To issue an Official transcript, a teacher or manager opens the student's transcript, types who it goes to in "Issued To" and selects "Issue Official transcript (PDF)". Moodle shows the transcript number and the verification code. The PDF can be downloaded from the student's page and from the Issued Official transcripts page.
 6. Whoever receives the transcript can enter its code on the verify page.
 
@@ -86,11 +86,15 @@ An Official transcript can't be issued while a course the student is taking now 
 
 ## Official transcript requests
 
-A student opens My transcript and fills in the request form: how to send it, who it goes to, and when. The registrar then opens Transcript requests, selects Issue, and sends the PDF the way the student asked. The plugin doesn't send it. Reissue makes a new copy with a new verification code.
+A student opens My transcript and fills in the request form: how to send it, who it goes to, and with Student Records as the source, when. The registrar then opens Transcript requests, selects Issue, and sends the PDF the way the student asked. The plugin doesn't send it. Reissue makes a new copy with a new verification code. Nobody can issue their own Official transcript: another person must do it, and their own page and queue row say so.
 
-Set the fees under Transcript settings > Official transcript fees. They default to $5 for email and $10 for mail or pick up, and 0 means free. With Student Records billing on, the fee goes on the student's account there. Otherwise the fee is only recorded on the request, and the school collects it another way. The student sees which of the two applies.
+Set the fees under Transcript settings > Official transcript fees. They default to $5 for email and $10 for mail or pick up, and 0 means free. With Student Records as the source, its billing on and a file there, the fee goes on the student's account. Otherwise the fee is only recorded on the request, and the school collects it another way. The student sees which of the two applies.
 
 To cancel a request that is pending, waiting or on hold, open "Cancel request" on the queue. A reason is optional, and it goes in the activity log. A cancelled request keeps its fee on the student's account, and the queue says so before you confirm.
+
+A double click can't charge or issue twice. Two quick submissions of the same request make one request and one fee, and the student is told if a repeat was left out. The same request a minute later is a new one, and so is a different request at any time. On the queue, two clicks on Issue, or two registrars at once, make one Official transcript. Reissue works again a minute after the last copy, and that includes the first Issue. On the issue form of a student's page, the same recipient within a minute gets the first copy back, with its number and code, and another recipient gets a new transcript. Cancel and Issue can't both happen to one request: whichever comes second changes nothing and says why.
+
+Registrars and admins open their own transcript in a staff view with all their tools, and a My transcript tab beside it. The My Transcript links in Student Records open My transcript. Students and course teachers see no change.
 
 ## With Student Records
 
@@ -106,11 +110,15 @@ For each student with a Student Records file:
 
 A student without a Student Records file keeps the transcript from this plugin's own data. Official transcripts already issued keep their frozen copy.
 
-Grades posted before you pick Student Records stay in this plugin and aren't read from there. A student's transcript lists each one as a problem, and it stops Official transcripts for that student until the Registrar enters the grade in Student Records. So enter those grades first, or pick Student Records before grades are posted.
+Grades posted before you pick Student Records stay in this plugin and aren't read from there. A student's transcript lists each one with no attempt of the same course code there as a problem, and it stops Official transcripts for that student until the Registrar enters the grade in Student Records. So enter those grades first, or pick Student Records before grades are posted.
 
-A course that runs again needs a new registration for each student. Without one, posting stops with a message rather than replacing the finished attempt.
+A course that runs again needs a new registration for each student. Without one, posting stops with a message rather than replacing a grade a teacher posted or the Registrar set.
 
-GPAs, hours earned and repeats are still worked out here, with this plugin's grading scale and marks. Student Records leaves out the same repeated attempts as this plugin, because it asks this plugin's calculator. Keep the scale and marks in step with those in Student Records. Two things can still differ: a program's minimum passing grade in Student Records can keep a course's hours from being earned there while the transcript counts them, and transfer credit marked "in GPA" counts in Student Records but not here. A grade from Student Records that isn't on this plugin's scale or marks has no points and earns no hours, so it is listed as a problem, and it stops Official transcripts for that student until you add it.
+GPAs, hours earned and repeats are worked out here, on the grading scale in Student Records, so the transcript and the student's record show the same figures. The transcript key prints that scale. Teachers see the marks of that scale for a student with a file there. The Grading scale and Marks pages in this plugin cover only students without a file, and both pages say so. The one exception is the key's wording for W, IP and TR, which comes from this plugin when Student Records has none.
+
+A course earns its hours when Student Records says it passed. A grade below a program's minimum passing grade stays in the GPA and earns no hours. If it would otherwise pass, it has a note on the transcript. Transfer credit marked "in GPA" prints its letter and quality points and counts in the overall GPA, but not in any term's GPA. Other transfer credit prints as TR and only adds to the hours earned. A school that counts transfer credit in the GPA on a site from before 1.4.3 should check the GPA text of the key under Transcript settings, because a saved text stays as it is.
+
+A grade that isn't on the scale in Student Records has no grade points, so it is listed as a problem, and it stops Official transcripts for that student until the grade or the scale is fixed.
 
 ## Transcripts from older builds
 
@@ -200,7 +208,7 @@ The plugin makes no network calls of its own. In the setup wizard, Moodle sends 
 ## Third-party code
 
 - smalot/pdfparser 2.13.1 (LGPL-3.0, upstream https://github.com/smalot/pdfparser) reads text from PDF files in the setup wizard. It is in `lib/pdfparser/`: the upstream `src/` folder and `LICENSE.txt`, unchanged, and `GPL-3.0.txt`, the GNU GPL text that the LGPL asks for. `classes/local/import/document_text.php` loads it with its own autoloader, so there is no Composer step.
-- Source Sans 3 (3.052) and Source Serif 4 (4.004), under the SIL Open Font License 1.1 (upstream https://github.com/adobe-fonts). The PDF transcripts embed these fonts. They are in `fonts/` as TCPDF font files, with the license texts `fonts/OFL-SourceSans3.txt` and `fonts/OFL-SourceSerif4.txt`.
+- Clouve Sans and Clouve Serif, under the SIL Open Font License 1.1. These are modified versions of Adobe's Source Sans 3 (3.052) and Source Serif 4 (4.004) (upstream https://github.com/adobe-fonts), renamed because the license reserves the name. The PDF transcripts embed these fonts. They are in `fonts/` as TCPDF font files, with the license texts `fonts/OFL-SourceSans3.txt` and `fonts/OFL-SourceSerif4.txt`.
 - TCPDF, which writes the PDF files and the QR code on Official transcripts, comes with Moodle.
 
 Both bundled items are declared in `thirdpartylibs.xml`. Each has a `readme_moodle.txt` that says where it came from and how to update it: `lib/pdfparser/readme_moodle.txt` and `fonts/readme_moodle.txt`.

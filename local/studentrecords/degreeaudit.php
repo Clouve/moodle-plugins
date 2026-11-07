@@ -95,11 +95,11 @@ echo $OUTPUT->heading(get_string('degreeaudit', $p) . ': ' . s(students::display
 if (!$result) {
     echo $OUTPUT->notification(get_string('auditnoprogram', $p), 'info');
     echo $OUTPUT->footer();
-    die();
+    return;
 }
 $num = fn($v) => $v === null ? '-' : format_float($v, -1);
 $unit = get_string('unit_' . $result['unittype'], $p);
-echo html_writer::tag('p', s($student->studentid) . ' · ' . s($result['programcode'] . ' - ' . $result['programname']) .
+echo html_writer::tag('p', s($student->studentid) . ' · ' . s($result['programcode']) . ' - ' . $result['programname'] .
     ' · ' . get_string('auditdate', $p, userdate(time(), get_string('strftimedate', 'langconfig'), catalog::timezone())));
 echo $OUTPUT->notification(
     get_string($result['complete'] ? 'audit_complete' : 'audit_incomplete', $p),
@@ -131,6 +131,26 @@ foreach ($result['groups'] as $g) {
             'unit' => $unit]),
         $g['complete'] ? 'good' : ($pending ? 'warn' : 'bad'),
         get_string($g['complete'] ? 'da_met' : ($pending ? 'da_pending' : 'da_notmet'), $p)
+    );
+}
+if (!$result['auditable']) {
+    $rows .= $row(
+        get_string('audit_hoursearned', $p),
+        get_string('da_nothingtocheck', $p),
+        $num($result['earned']) . ' ' . $unit,
+        'neutral',
+        get_string('notset', $p)
+    );
+} else if (!$result['groups']) {
+    // With no course list the hours are the requirement.
+    $pending = !$result['hoursok'] && $result['earned'] + $result['inprogress'] + 0.001 >= (float)$result['totalhours'];
+    $rows .= $row(
+        get_string('audit_hoursearned', $p),
+        get_string('da_nocourselist', $p, \core_text::strtolower($unit)),
+        get_string('da_ofhours', $p, (object)['met' => $num($result['earned']),
+            'needed' => $result['totalhours'] ? $num($result['totalhours']) : '-', 'unit' => $unit]),
+        $result['hoursok'] ? 'good' : ($pending ? 'warn' : 'bad'),
+        get_string($result['hoursok'] ? 'da_met' : ($pending ? 'da_pending' : 'da_notmet'), $p)
     );
 }
 if ($result['mingpa'] !== null) {
@@ -184,19 +204,24 @@ $total = (float)($result['totalhours'] ?? 0);
 $done = $result['earned'] + $result['inprogress'];
 $pct = \local_studentrecords\local\record_view::percent($done, $total);
 $panel = html_writer::tag('h2', get_string('da_approval', $p), ['class' => 'sr-card-title h3']);
-$panel .= html_writer::div(html_writer::span(get_string('da_progress', $p, (object)['done' => $num($done), 'total' => $num($total),
-    'unit' => $unit])) . html_writer::tag('strong', $pct . '%'), 'sr-card-row');
-$panel .= html_writer::div(html_writer::span('', 'sr-progress-bar', ['style' => 'width:' . $pct . '%']), 'sr-progress', [
-    'role' => 'progressbar', 'aria-valuenow' => $pct, 'aria-valuemin' => 0, 'aria-valuemax' => 100,
-    'aria-label' => get_string('rec_progresslabel', $p)]);
+// With no course list and no total hours there is nothing to measure progress against.
+if ($result['groups'] || $total > 0) {
+    $panel .= html_writer::div(html_writer::span(get_string('da_progress', $p, (object)['done' => $num($done),
+        'total' => $num($total), 'unit' => $unit])) . html_writer::tag('strong', $pct . '%'), 'sr-card-row');
+    $panel .= html_writer::div(html_writer::span('', 'sr-progress-bar', ['style' => 'width:' . $pct . '%']), 'sr-progress', [
+        'role' => 'progressbar', 'aria-valuenow' => $pct, 'aria-valuemin' => 0, 'aria-valuemax' => 100,
+        'aria-label' => get_string('rec_progresslabel', $p)]);
+}
 if ($result['complete']) {
     $panel .= html_writer::div(get_string('da_readyfinal', $p), 'sr-note sr-note-good');
 } else if (!empty($result['completeifpassed'])) {
     $panel .= html_writer::div(get_string('da_conditional', $p), 'sr-note sr-note-warn');
 } else {
-    $panel .= html_writer::div(get_string('da_notready', $p), 'sr-note sr-note-bad');
+    $panel .= html_writer::div(get_string($result['auditable'] ? 'da_notready' : 'da_notauditable', $p), 'sr-note sr-note-bad');
 }
-if ($manage && $openapp && !$print) {
+if ($manage && $openapp && $own && !$print) {
+    $panel .= html_writer::tag('p', get_string('gradownapp', $p), ['class' => 'sr-muted small mb-0']);
+} else if ($manage && $openapp && !$print) {
     $f = html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
     $f .= html_writer::label(get_string('da_diplomaname', $p), 'dadiploma', true, ['class' => 'd-block small mt-2']);
     $f .= html_writer::empty_tag('input', ['type' => 'text', 'name' => 'diplomaname', 'id' => 'dadiploma',
@@ -219,14 +244,16 @@ echo html_writer::div(html_writer::div($main, 'sr-col-main') . html_writer::div(
     'sr-col-side'
 ), 'sr-columns');
 echo html_writer::start_tag('details', ['class' => 'sr-details mt-4']);
-echo html_writer::tag('summary', get_string('da_coursebycourse', $p), ['class' => 'sr-h2']);
+echo html_writer::tag('summary', get_string($result['groups'] ? 'da_coursebycourse' : 'da_totals', $p), ['class' => 'sr-h2']);
 $facts = [
     get_string('audit_hoursearned', $p) => $num($result['earned']) . ' / ' . $num($result['totalhours']) . ' ' . $unit .
         ($result['inprogress'] ? ' (' . get_string('audit_inprogresshours', $p, $num($result['inprogress'])) . ')' : ''),
     get_string('gpa', $p) => ($result['gpa'] === null ? '-' : format_float($result['gpa'], 2)) .
         ($result['mingpa'] !== null ? ' (' . get_string('audit_mingpa', $p, format_float($result['mingpa'], 2)) . ')' : ''),
-    get_string('audit_track', $p) => $result['track'] !== '' ? s($result['track']) : '-',
 ];
+if ($result['groups']) {
+    $facts[get_string('audit_track', $p)] = $result['track'] !== '' ? s($result['track']) : '-';
+}
 $table = new html_table();
 foreach ($facts as $k => $v) {
     $table->data[] = [html_writer::tag('strong', $k), $v];
@@ -261,7 +288,7 @@ if ($result['missing']) {
     }
     echo $OUTPUT->heading(get_string('audit_stillneeded', $p), 4) . html_writer::alist($items);
 }
-if ($manage && !$print) {
+if ($manage && !$own && !$print) {
     $req = [];
     foreach ($result['groups'] as $g) {
         foreach ($g['rows'] as $r) {

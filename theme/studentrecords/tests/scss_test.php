@@ -56,6 +56,25 @@ final class scss_test extends \advanced_testcase {
     }
 
     /**
+     * Boost clears the frame of #region-main on login pages with a selector that has an id. The login card outranks it
+     * with the theme's own colours, which dark mode swaps, and the phone rule outranks it too, so a phone keeps no frame.
+     */
+    public function test_login_card_frame_outranks_boost(): void {
+        $css = \theme_config::load('studentrecords')->get_css_content();
+
+        $this->assertDebuggingNotCalled();
+        $card = '\.pagelayout-login #region-main\.sr-login-card\s*\{\s*';
+        $this->assertMatchesRegularExpression(
+            '/' . $card . 'background:\s*var\(--sr-surface\);\s*border:\s*1px solid var\(--sr-border\);?\s*\}/',
+            $css
+        );
+        $this->assertMatchesRegularExpression(
+            '/@media \(max-width: ?575\.98px\)\s*\{[^@]*' . $card . 'background:\s*(transparent|#fff0);\s*border:\s*0;?\s*\}/',
+            $css
+        );
+    }
+
+    /**
      * The editor's styles come from Boost. The theme has no editor.scss of its own.
      */
     public function test_editor_css_comes_from_boost(): void {

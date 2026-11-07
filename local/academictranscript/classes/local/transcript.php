@@ -136,12 +136,14 @@ class transcript {
         foreach ($attempts as $i => $a) {
             $calcinput[$i] = ['code' => $a['code'], 'group' => (string)$a['termid'], 'order' => $termorder[$a['termid']] ?? -1,
                 'time' => $a['time'], 'hours' => $a['hours'], 'grade' => $a['grade']];
+            $calcinput[$i] += array_intersect_key($a, ['earns' => 1, 'points' => 1]);
         }
-        $calc = scale::calculator();
+        // A student with a file in Student Records is counted on the scale there, so the two can't give different results.
+        $calc = $sr ? srsource::calculator() : scale::calculator();
         $result = $calc->compute($calcinput);
         if ($sr) {
             foreach ($attempts as $a) {
-                if ($a['grade'] !== scale::INPROGRESS && !$calc->knows($a['grade'])) {
+                if ($a['grade'] !== scale::INPROGRESS && empty($a['withdrawn']) && !$calc->knows($a['grade'])) {
                     $data['problems'][] = get_string(
                         'problem_unknowngrade',
                         'local_academictranscript',
@@ -156,10 +158,12 @@ class transcript {
             $r = $result['attempts'][$i];
             $notes = $a['note'] !== '' ? [$a['note']] : [];
             if (!$calc->is_letter($a['grade']) && $a['grade'] !== scale::INPROGRESS && $a['note'] === '') {
-                $notes[] = scale::code_label($a['grade']);
+                $notes[] = $sr ? srsource::mark_label($a['grade']) : scale::code_label($a['grade']);
             }
             if ($r['excluded']) {
                 $notes[] = get_string('footnote_repeated', 'local_academictranscript');
+            } else if ($sr && !$r['earned'] && $calc->earns($a['grade'])) {
+                $notes[] = get_string('footnote_belowminimum', 'local_academictranscript');
             }
             $groups[$a['termid']][] = ['code' => $a['code'], 'title' => $a['title'], 'hours' => $a['hours'],
                 'grade' => $a['grade'], 'points' => $r['points'], 'qp' => $r['qp'], 'ingpa' => $r['ingpa'],
@@ -212,14 +216,30 @@ class transcript {
         }
 
         $inst = $result['total'];
+        // Transfer credit Student Records counts in the GPA goes into the overall GPA, and never into a term's.
+        $transfergpa = $sr ? $sr['transfergpa'] : [];
+        $transfer = $transfergpa ? $calc->compute($transfergpa)['total'] : ['gpahours' => 0.0, 'qp' => 0.0];
+        $overall = $transfergpa ? $calc->compute(array_merge($calcinput, $transfergpa))['total'] : $inst;
         $data['summary'] = [
             'institutional' => $inst,
-            'transfer' => ['earned' => $transferhundredths / 100.0, 'gpahours' => 0.0, 'qp' => 0.0, 'gpa' => ''],
+            'transfer' => ['earned' => $transferhundredths / 100.0, 'gpahours' => $transfer['gpahours'], 'qp' => $transfer['qp'],
+                'gpa' => ''],
             'overall' => ['earned' => ((int)round($inst['earned'] * 100) + $transferhundredths) / 100.0,
-                'gpahours' => $inst['gpahours'], 'qp' => $inst['qp'], 'gpa' => $inst['gpa']],
+                'gpahours' => $overall['gpahours'], 'qp' => $overall['qp'], 'gpa' => $overall['gpa']],
         ];
         $data['lastentry'] = $lastentry ?: null;
         return $data;
+    }
+
+    /**
+     * Rows of the key for a transcript: of the scale it was counted on.
+     *
+     * @param array $data from build()
+     * @return array see scale::scale_rows()
+     */
+    public static function key_rows(array $data): array {
+        return ($data['source'] ?? '') === srsource::STUDENTRECORDS && srsource::enabled() ? srsource::key_rows() :
+            scale::scale_rows();
     }
 
     /**
@@ -387,6 +407,10 @@ class transcript {
         if ($recipient === '') {
             throw new \moodle_exception('recipientrequired', 'local_academictranscript');
         }
+        // Every way of issuing comes through here, so nobody can issue their own transcript by any of them.
+        if ($userid === (int)$USER->id) {
+            throw new \moodle_exception('issueown', 'local_academictranscript');
+        }
         // A hold stops every way of issuing, which is what the student is told.
         $holds = requests::holds($userid);
         if ($holds) {
@@ -404,7 +428,7 @@ class transcript {
         $data['generated'] = $issue->timecreated;
         $data['recipient'] = $issue->recipient;
         $data['transcriptno'] = $issue->transcriptno;
-        $data['key'] = scale::scale_rows();
+        $data['key'] = self::key_rows($data);
         $issue->snapshot = json_encode($data);
         $DB->update_record('local_academictranscript_issue', $issue);
         $transaction->allow_commit();

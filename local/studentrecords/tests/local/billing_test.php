@@ -281,6 +281,118 @@ final class billing_test extends \advanced_testcase {
     }
 
     /**
+     * A line is an aid line when it comes from an award, whatever kind of credit the fund makes, or when it is a federal kind
+     * of credit, which only an award adds.
+     *
+     * @dataProvider aid_line_provider
+     * @param array $line
+     * @param bool $expected
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('aid_line_provider')]
+    public function test_is_aid_line(array $line, bool $expected): void {
+        $this->assertSame($expected, billing::is_aid_line((object)$line));
+    }
+
+    /**
+     * Data for test_is_aid_line.
+     *
+     * @return array
+     */
+    public static function aid_line_provider(): array {
+        return [
+            'federal grant' => [['aidid' => 5, 'method' => 'fedgrant'], true],
+            'federal loan' => [['aidid' => '5', 'method' => 'fedloan'], true],
+            'state grant from an award' => [['aidid' => 5, 'method' => 'grant'], true],
+            'private scholarship from an award' => [['aidid' => 5, 'method' => 'scholarship'], true],
+            'federal kind with no award' => [['aidid' => null, 'method' => 'fedgrant'], true],
+            'scholarship added by staff' => [['aidid' => null, 'method' => 'scholarship'], false],
+            'a check' => [['aidid' => null, 'method' => 'check'], false],
+            'a charge' => [['aidid' => null, 'method' => null], false],
+        ];
+    }
+
+    /**
+     * Reversing an aid line needs the manage aid permission, on the server, whichever page asks. Someone with it can, and
+     * other lines don't need it.
+     */
+    public function test_reversing_an_aid_line_needs_manageaid(): void {
+        global $DB;
+        $this->preventResetByRollback();
+        $this->generator->set_settings(['fedaid' => 1]);
+        $student = $this->generator->create_user_student();
+        $award = aid::save_award($student, ['awardyear' => '2029-30', 'fund' => 'state', 'amount' => 500, 'status' => 'accepted']);
+        $aidline = aid::disburse($award, 500, time());
+        $charge = $this->generator->create_charge(['studentid' => $student->id, 'amount' => 800]);
+        $role = function (string $capability): \stdClass {
+            $user = $this->getDataGenerator()->create_user();
+            $roleid = $this->getDataGenerator()->create_role();
+            $context = \context_system::instance();
+            assign_capability($capability, CAP_ALLOW, $roleid, $context->id);
+            role_assign($roleid, $user->id, $context->id);
+            return $user;
+        };
+
+        $this->setUser($role('local/studentrecords:managebilling'));
+        try {
+            billing::reverse($aidline, 'Not eligible');
+            $this->fail('Finance alone can\'t reverse an aid line.');
+        } catch (\required_capability_exception $e) {
+            $this->assertSame('nopermissions', $e->errorcode);
+        }
+        $this->assertNull($DB->get_field(billing::TXN, 'reversedby', ['id' => $aidline]));
+        $this->assertSame(300.0, billing::balance((int)$student->id));
+        billing::reverse($charge, 'Entered twice');
+        $this->assertSame(-500.0, billing::balance((int)$student->id));
+
+        $this->setUser($role('local/studentrecords:manageaid'));
+        $reversal = billing::reverse($aidline, 'Not eligible');
+        $this->assertSame($reversal, (int)$DB->get_field(billing::TXN, 'reversedby', ['id' => $aidline]));
+        $this->assertSame(0.0, billing::balance((int)$student->id));
+        $this->assertSame(0.0, (float)aid::awards((int)$student->id)[$award]->disbursed);
+    }
+
+    /**
+     * The charge that puts returned aid back on the account is an aid line, like the disbursement it takes back: Finance alone
+     * can't reverse it, and someone with the manage aid permission can. The line of an ordinary refund is no aid line.
+     */
+    public function test_return_of_aid_charge_is_an_aid_line(): void {
+        global $DB;
+        $this->preventResetByRollback();
+        $student = $this->generator->create_user_student();
+        $refund = fn(string $reason) => (int)$DB->insert_record(refunds::REFUNDS, (object)['studentid' => $student->id,
+            'reason' => $reason, 'eventdate' => time(), 'details' => '[]', 'amount' => 500, 'status' => 'approved',
+            'userid' => 2, 'timecreated' => time(), 'timemodified' => time()]);
+        $returned = billing::add_line(['studentid' => $student->id, 'txntype' => 'charge', 'amount' => 500,
+            'refundid' => $refund('aidreturn'), 'description' => 'Federal aid returned']);
+        $ordinary = billing::add_line(['studentid' => $student->id, 'txntype' => 'charge', 'amount' => 100,
+            'refundid' => $refund('dropped'), 'description' => 'Charge']);
+        $user = function (string $capability): \stdClass {
+            $user = $this->getDataGenerator()->create_user();
+            $roleid = $this->getDataGenerator()->create_role();
+            assign_capability($capability, CAP_ALLOW, $roleid, \context_system::instance()->id);
+            role_assign($roleid, $user->id, \context_system::instance()->id);
+            return $user;
+        };
+
+        $this->assertTrue(billing::is_aid_line($DB->get_record(billing::TXN, ['id' => $returned])));
+        $this->assertFalse(billing::is_aid_line($DB->get_record(billing::TXN, ['id' => $ordinary])));
+
+        $this->setUser($user('local/studentrecords:managebilling'));
+        try {
+            billing::reverse($returned, 'Taken off');
+            $this->fail('Finance alone can\'t reverse a return of aid.');
+        } catch (\required_capability_exception $e) {
+            $this->assertSame('nopermissions', $e->errorcode);
+        }
+        billing::reverse($ordinary, 'Entered twice');
+        $this->assertSame(500.0, billing::balance((int)$student->id));
+
+        $this->setUser($user('local/studentrecords:manageaid'));
+        billing::reverse($returned, 'Taken off');
+        $this->assertSame(0.0, billing::balance((int)$student->id));
+    }
+
+    /**
      * Only Finance staff and the student see an account.
      */
     public function test_can_view(): void {

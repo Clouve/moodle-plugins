@@ -24,7 +24,8 @@
     Same as Boost's navbar with the school brand (srbrand). One template serves Moodle 4.5 to 5.3: navbar-light gives
     the phone menu its icon on Bootstrap 4, sr-only and visually-hidden are the same class on Bootstrap 4 and 5, and
     Moodle 5.3's colour mode menu is empty on earlier versions. The tabs stay on core/moremenu, which all four versions
-    have, and not on the core/primarymoremenu of Moodle 5.3, so they keep the school's colour.
+    have, and not on the core/primarymoremenu of Moodle 5.3, so they keep the school's colour. Boost took away the divider
+    after the search box in Moodle 5.3, so srsearchdivider keeps it on earlier versions only.
 
     Example context (json):
     {
@@ -44,6 +45,7 @@
         "sitename": "Moodle Site",
         "srbrand": {"schoolname": "Example College", "initials": "EC", "logourl": "", "homeurl": "#"},
         "srnote": "No LMS access",
+        "srsearchdivider": true,
         "mobileprimarynav": [
             {
                 "text": "Dashboard",
@@ -90,7 +92,9 @@
             {{/srnote}}
             {{# output.search_box }}
                 {{{ output.search_box }}}
-                <div class="divider border-start h-75 align-self-center mx-1"></div>
+                {{#srsearchdivider}}
+                    <div class="divider border-start h-75 align-self-center mx-1"></div>
+                {{/srsearchdivider}}
             {{/output.search_box}}
             {{#langmenu}}
                 {{> theme_boost/language_menu }}

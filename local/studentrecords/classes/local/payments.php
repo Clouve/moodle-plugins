@@ -148,47 +148,67 @@ class payments {
     }
 
     /**
-     * Give course access for a registration that waits: enrol in the Moodle course and clear the wait.
+     * Give course access for a registration that waits: enrol in the Moodle course and clear the wait. Two payments can get
+     * here at once, so the wait is read under the lock on the registration: the second finds it gone and does nothing. Never
+     * call this under the lock on the accounts, which comes after the lock on a registration.
      *
      * @param int $regid
      * @param string $note why (staff giving access before payment), or '' when the payment rule is met
      */
     public static function grant(int $regid, string $note = ''): void {
-        global $DB;
-        $reg = $DB->get_record(registration::REG, ['id' => $regid], '*', MUST_EXIST);
-        if (!$reg->accesspending) {
-            return;
-        }
-        $student = students::get((int)$reg->studentid);
-        $offer = registration::offer((int)$reg->offerid);
-        billing::transaction(function () use ($regid, $note, $reg, $student, $offer) {
-            if ($reg->status === 'registered' && $offer->moodlecourseid) {
-                registration::enrol((int)$offer->moodlecourseid, (int)$student->userid);
+        registration::with_lock('reg' . $regid, function () use ($regid, $note) {
+            global $DB;
+            $reg = $DB->get_record(registration::REG, ['id' => $regid], '*', MUST_EXIST);
+            if (!$reg->accesspending) {
+                return;
             }
-            records::save(
-                registration::REG,
-                ['id' => $regid, 'accesspending' => 0],
-                $note !== '' ? 'form' : 'billing',
-                (int)$student->userid
-            );
-            audit::log('update', 'student', (int)$student->id, (int)$student->userid, 'course access ' . $offer->code .
-                ($note !== '' ? ' given by staff: ' . $note : ' (payment received)'));
-            messages::student('accessopen', $student, ['course' => $offer->code, 'term' => $offer->termname]);
+            $student = students::get((int)$reg->studentid);
+            $offer = registration::offer((int)$reg->offerid);
+            billing::transaction(function () use ($regid, $note, $reg, $student, $offer) {
+                if ($reg->status === 'registered' && $offer->moodlecourseid) {
+                    registration::enrol((int)$offer->moodlecourseid, (int)$student->userid);
+                }
+                records::save(
+                    registration::REG,
+                    ['id' => $regid, 'accesspending' => 0],
+                    $note !== '' ? 'form' : 'billing',
+                    (int)$student->userid
+                );
+                audit::log('update', 'student', (int)$student->id, (int)$student->userid, 'course access ' . $offer->code .
+                    ($note !== '' ? ' given by staff: ' . $note : ' (payment received)'));
+                messages::student('accessopen', $student, ['course' => $offer->code, 'term' => $offer->termname]);
+            });
         });
     }
 
     /**
-     * Give course access to every waiting registration of a student whose term now meets the payment rule.
+     * Give course access to every waiting registration of a student whose term now meets the payment rule. Under the lock on
+     * the accounts this happens when the lock ends. Each registration is tried on its own: one course that can't open stays
+     * on the account page for staff, the audit log says why, and the others open. In a transaction a failure has already undone
+     * that transaction, so it goes to the caller.
      *
      * @param \stdClass $student
-     * @return int registrations given access
+     * @return int registrations given access now
      */
     public static function release(\stdClass $student): int {
+        global $DB;
+        if (billing::after_lock($student)) {
+            return 0;
+        }
         $n = 0;
         foreach (self::pending((int)$student->id) as $r) {
-            if (self::access_ok($student, (int)$r->termid)) {
+            if (!self::access_ok($student, (int)$r->termid)) {
+                continue;
+            }
+            try {
                 self::grant((int)$r->id);
                 $n++;
+            } catch (\Throwable $e) {
+                if ($DB->is_transaction_started()) {
+                    throw $e;
+                }
+                audit::log('update', 'student', (int)$student->id, (int)$student->userid, 'course access after payment: ' .
+                    $e->getMessage());
             }
         }
         return $n;
@@ -259,7 +279,7 @@ class payments {
      *
      * @param \stdClass $student
      */
-    protected static function settle(\stdClass $student): void {
+    public static function settle(\stdClass $student): void {
         try {
             plans::sync($student);
             self::release($student);
@@ -354,13 +374,28 @@ class payments {
                 ' does not fit request ' . $reqid . ': not recorded');
             return false;
         }
+        self::record_online($req, $payment, $student);
+        return true;
+    }
+
+    /**
+     * Put an online payment on the account, unless it is there. The check and the line are one step under the lock on the
+     * accounts, so a delivery and the recovery can't both add it. A reversed payment keeps its first line, so it isn't added
+     * again.
+     *
+     * @param \stdClass $req
+     * @param \stdClass $payment row of Moodle's payments table that fits the request
+     * @param \stdClass $student
+     * @return bool whether a line was added
+     */
+    protected static function record_online(\stdClass $req, \stdClass $payment, \stdClass $student): bool {
         $added = billing::one_at_a_time(function () use ($req, $payment, $student) {
             global $DB;
             if ($DB->record_exists_select(billing::TXN, 'paymentid = ? AND reverses IS NULL', [$payment->id])) {
                 return false;
             }
             $txnid = self::add_payment($student, (float)$req->amount, 'online', ['paymentid' => $payment->id,
-                'reference' => \core_text::substr($payment->gateway . ' ' .
+                'txndate' => (int)$payment->timecreated ?: time(), 'reference' => \core_text::substr($payment->gateway . ' ' .
                 get_string('paymentref', 'local_studentrecords', $payment->id), 0, 100)]);
             if ($DB->get_field(self::REQ, 'status', ['id' => $req->id]) === 'open') {
                 $DB->update_record(self::REQ, (object)['id' => $req->id, 'status' => 'paid', 'paymentid' => $payment->id,
@@ -374,7 +409,57 @@ class payments {
         if ($added) {
             self::settle($student);
         }
-        return true;
+        return $added;
+    }
+
+    /**
+     * Record the online payments that never reached the account. Moodle's payment system delivers a payment once, so a delivery
+     * that stopped (the accounts were busy, the request died) is lost unless something looks for it. Each payment gets the
+     * checks of a delivery. One that doesn't fit is said once in the audit log and stays off the account.
+     *
+     * Only payments from after the start time count, which install and upgrade set. An older payment with no line is no sign
+     * of a lost delivery: Finance may have entered that money by hand, and such a line has no link to the payment. A site with
+     * no start time gets one now, and this run records nothing.
+     *
+     * @return int payments recorded
+     */
+    public static function recover(): int {
+        global $DB;
+        $from = (int)catalog::setting('recoverfrom');
+        if (!$from) {
+            set_config('recoverfrom', time(), 'local_studentrecords');
+            return 0;
+        }
+        $sql = "SELECT p.*
+                  FROM {payments} p
+                  JOIN {" . self::REQ . "} r ON r.id = p.itemid
+             LEFT JOIN {" . billing::TXN . "} t ON t.paymentid = p.id AND t.reverses IS NULL
+                 WHERE p.component = 'local_studentrecords' AND p.paymentarea = ? AND p.timecreated >= ? AND t.id IS NULL
+              ORDER BY p.id";
+        $n = 0;
+        foreach ($DB->get_records_sql($sql, [self::AREA, $from]) as $payment) {
+            try {
+                $req = $DB->get_record(self::REQ, ['id' => $payment->itemid], '*', MUST_EXIST);
+                $student = students::get((int)$req->studentid);
+                $log = fn(string $info) => audit::log('update', 'account', (int)$student->id, (int)$student->userid, $info);
+                $misfit = 'online payment ' . $payment->id . ' does not fit request ' . $req->id . ': not recorded';
+                if (!self::payment_fits($req, $payment, (int)$payment->userid)) {
+                    if (!$DB->record_exists('local_studentrecords_log', ['relateduserid' => $student->userid, 'info' => $misfit])) {
+                        $log($misfit);
+                    }
+                } else if (self::record_online($req, $payment, $student)) {
+                    $log('online payment ' . $payment->id . ' recovered: its delivery did not finish');
+                    $n++;
+                }
+            } catch (\Throwable $e) {
+                if ($e instanceof \moodle_exception && $e->errorcode === 'err_busy') {
+                    // The next run tries again.
+                    break;
+                }
+                mtrace('Online payment ' . $payment->id . ' not recorded: ' . $e->getMessage());
+            }
+        }
+        return $n;
     }
 
     /**

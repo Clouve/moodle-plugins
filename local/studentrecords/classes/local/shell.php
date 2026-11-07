@@ -18,6 +18,9 @@ class shell {
     /** @var array|null Menu groups for this request. */
     protected static $groups = null;
 
+    /** @var array Offerings each user may take attendance in, for this request: user id => offerings. */
+    protected static $offerings = [];
+
     /**
      * Whether the page is a Student Records page (or an Academic Transcript page), so it gets the menu.
      *
@@ -64,6 +67,7 @@ class shell {
      */
     public static function reset(): void {
         self::$groups = null;
+        self::$offerings = [];
     }
 
     /**
@@ -73,10 +77,9 @@ class shell {
      */
     public static function my_offerings(): array {
         global $DB, $USER;
-        static $cache = [];
         $uid = (int)$USER->id;
-        if (isset($cache[$uid])) {
-            return $cache[$uid];
+        if (isset(self::$offerings[$uid])) {
+            return self::$offerings[$uid];
         }
         $out = [];
         if (isloggedin() && !isguestuser()) {
@@ -94,12 +97,12 @@ class shell {
                 }
             }
         }
-        return $cache[$uid] = $out;
+        return self::$offerings[$uid] = $out;
     }
 
     /**
-     * The menu groups the current user may see, in order: student, records staff, finance, financial aid, teacher,
-     * setup. Each group: ['key', 'heading', 'items' => [key => [moodle_url, label]], 'note'].
+     * The menu groups the current user may see, in order: student, records staff or grade change approver, finance,
+     * financial aid, teacher, setup. Each group: ['key', 'heading', 'items' => [key => [moodle_url, label]], 'note'].
      *
      * @return array
      */
@@ -135,7 +138,8 @@ class shell {
                 \core_component::get_component_directory('local_academictranscript') !== null &&
                     has_capability('local/academictranscript:viewown', $sys)
             ) {
-                $items['mytranscript'] = [new \moodle_url('/local/academictranscript/index.php'), $s('nav_mytranscript')];
+                $items['mytranscript'] = [new \moodle_url('/local/academictranscript/index.php', ['view' => 'mine']),
+                    $s('nav_mytranscript')];
             }
             $items['mydocuments'] = [$u('mydocuments.php'), $s('nav_mydocuments')];
             $items['mymessages'] = [new \moodle_url('/message/index.php'), $s('nav_messages')];
@@ -164,6 +168,10 @@ class shell {
                     $s('nav_transcriptrequests')];
             }
             $groups[] = ['key' => 'records', 'heading' => $s('pluginname'), 'items' => $items, 'note' => ''];
+        } else if (staffarea::can_open('gradechanges')) {
+            // An approver who isn't records staff: the page they decide on, and no records staff home.
+            $groups[] = ['key' => 'approver', 'heading' => $s('pluginname'), 'note' => '',
+                'items' => ['gradechanges' => [$u(staffarea::PAGES['gradechanges'][0]), $s('gradechanges')]]];
         }
 
         // Finance.
@@ -318,7 +326,9 @@ class shell {
     }
 
     /**
-     * The menu at the top of the page for themes without the Student Records drawer (folded on small screens).
+     * The menu at the top of the page for themes without the Student Records drawer: open on wide screens and folded on
+     * small ones. Only a script could open one details element by screen width, and the page must work without one, so
+     * there is a copy for each and styles.css shows one of them.
      *
      * @return string HTML
      */
@@ -331,8 +341,12 @@ class shell {
         if ($menu === '') {
             return '';
         }
-        return \html_writer::tag('details', \html_writer::tag('summary', get_string('nav_menu', 'local_studentrecords')) .
-            $menu, ['class' => 'sr-inline-menu mb-3', 'open' => 'open']);
+        $summary = \html_writer::tag('summary', get_string('nav_menu', 'local_studentrecords'));
+        $wide = ['class' => 'sr-inline-menu sr-inline-menu-wide mb-3', 'open' => 'open'];
+        $small = ['class' => 'sr-inline-menu sr-inline-menu-small mb-3'];
+        // The wide copy comes first. Each copy has its own call to menu(), so that no id comes twice on the page.
+        return \html_writer::tag('details', $summary . $menu, $wide) .
+            \html_writer::tag('details', $summary . self::menu($PAGE->url), $small);
     }
 
     /**

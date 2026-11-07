@@ -314,10 +314,14 @@ body.sr-login #page-wrapper {
     max-width: 440px;
     margin: 0 auto;
     padding: 36px;
-    background: var(--sr-surface);
-    border: 1px solid var(--sr-border);
     border-radius: 6px;
     box-shadow: none;
+}
+
+// Boost clears the frame of #region-main on login pages. Its selector has an id, so this one needs the id too.
+.pagelayout-login #region-main.sr-login-card {
+    background: var(--sr-surface);
+    border: 1px solid var(--sr-border);
 }
 
 // The form is Moodle's own, which differs between versions. The school's name replaces its logo and heading, and
@@ -359,9 +363,11 @@ body.sr-login #page-wrapper {
         padding: 24px 0;
     }
     .sr-login-card {
-        border: 0;
-        background: transparent;
         padding: 16px;
+    }
+    .pagelayout-login #region-main.sr-login-card {
+        background: transparent;
+        border: 0;
     }
 }
 

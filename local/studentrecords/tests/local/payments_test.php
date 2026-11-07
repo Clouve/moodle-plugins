@@ -30,7 +30,7 @@ final class payments_test extends \advanced_testcase {
         $paymentgenerator = $this->getDataGenerator()->get_plugin_generator('core_payment');
         $account = $paymentgenerator->create_payment_account(['gateways' => 'paypal']);
         $this->accountid = (int)$account->get('id');
-        $this->generator->set_settings(['billing' => 1, 'paymentaccount' => $this->accountid]);
+        $this->generator->set_settings(['billing' => 1, 'paymentaccount' => $this->accountid, 'recoverfrom' => time() - WEEKSECS]);
     }
 
     /**
@@ -241,6 +241,8 @@ final class payments_test extends \advanced_testcase {
         $this->assertSame([-100.0, -100.0], $this->payment_amounts($student));
         $this->assertSame(-100.0, billing::balance((int)$student->id));
         $this->assertSame((int)$first, (int)$DB->get_field(payments::REQ, 'paymentid', ['id' => $reqid]));
+        $this->assertTrue($DB->record_exists('local_studentrecords_log', ['relateduserid' => $student->userid,
+            'info' => 'second online payment ' . $second . ' of request ' . $reqid]));
     }
 
     /**
@@ -298,6 +300,407 @@ final class payments_test extends \advanced_testcase {
 
         $this->assertSame(0, (int)$DB->get_field(registration::REG, 'accesspending', ['id' => $regid]));
         $this->assertTrue(is_enrolled(\context_course::instance($course->id), (int)$student->userid));
+    }
+
+    /**
+     * Use locks that note the state of the test, and tell who holds what.
+     *
+     * @param callable $state gives the state to note
+     */
+    private function record_locks(callable $state): void {
+        global $CFG;
+        require_once(__DIR__ . '/../fixtures/recording_lock_factory.php');
+        $CFG->lock_factory = recording_lock_factory::class;
+        recording_lock_factory::$notes = [];
+        recording_lock_factory::$busy = '';
+        recording_lock_factory::$state = $state;
+    }
+
+    /**
+     * A line that lowers the balance under the lock on the accounts opens the course after the lock ends. Enrolling can make
+     * Moodle send a course's welcome message at the commit, and a mail server that hangs must not hold up every account.
+     */
+    public function test_course_access_is_given_after_the_lock_on_the_accounts(): void {
+        global $DB;
+        $this->preventResetByRollback();
+        $student = $this->student_who_owes(100);
+        $course = $this->getDataGenerator()->create_course();
+        $regid = $this->waiting_registration($student, (int)$course->id);
+        $this->setAdminUser();
+        $chargeid = (int)$DB->get_field(billing::TXN, 'id', ['studentid' => $student->id, 'txntype' => 'charge']);
+        $this->record_locks(fn() => (int)$DB->get_field(registration::REG, 'accesspending', ['id' => $regid]));
+
+        billing::reverse($chargeid, 'Entered twice');
+
+        // Nothing is taken under the lock on the accounts: the lock on the registration comes after it.
+        $this->assertSame([['taken', 'accounts', 1], ['released', 'accounts', 1], ['taken', 'reg' . $regid, 1],
+            ['released', 'reg' . $regid, 0]], recording_lock_factory::$notes);
+        $this->assertSame(0, (int)$DB->get_field(registration::REG, 'accesspending', ['id' => $regid]));
+        $this->assertTrue(is_enrolled(\context_course::instance($course->id), (int)$student->userid));
+    }
+
+    /**
+     * One course that can't open doesn't keep the others waiting: each registration is tried on its own. The bad one keeps
+     * waiting for staff, and the audit log says why.
+     */
+    public function test_one_course_that_cannot_open_does_not_stop_the_others(): void {
+        global $DB;
+        $this->preventResetByRollback();
+        $student = $this->student_who_owes(100);
+        $bad = $this->getDataGenerator()->create_course();
+        $good = $this->getDataGenerator()->create_course();
+        $badreg = $this->waiting_registration($student, (int)$bad->id);
+        $goodreg = $this->waiting_registration($student, (int)$good->id);
+        $DB->delete_records('enrol', ['courseid' => $bad->id, 'enrol' => 'manual']);
+
+        payments::record($student, 100, 'check');
+
+        $this->assertSame(1, (int)$DB->get_field(registration::REG, 'accesspending', ['id' => $badreg]));
+        $this->assertSame(0, (int)$DB->get_field(registration::REG, 'accesspending', ['id' => $goodreg]));
+        $this->assertTrue(is_enrolled(\context_course::instance($good->id), (int)$student->userid));
+        $this->assertTrue($DB->record_exists_select(
+            'local_studentrecords_log',
+            $DB->sql_like('info', '?'),
+            ['course access after payment%']
+        ));
+    }
+
+    /**
+     * A line that lowers the balance stands when a course can't open, and the other courses open. Only the course keeps waiting.
+     */
+    public function test_a_line_stands_when_a_course_cannot_open(): void {
+        global $DB;
+        $this->preventResetByRollback();
+        $student = $this->student_who_owes(100);
+        $bad = $this->getDataGenerator()->create_course();
+        $good = $this->getDataGenerator()->create_course();
+        $badreg = $this->waiting_registration($student, (int)$bad->id);
+        $goodreg = $this->waiting_registration($student, (int)$good->id);
+        $DB->delete_records('enrol', ['courseid' => $bad->id, 'enrol' => 'manual']);
+        $this->setAdminUser();
+
+        $lineid = billing::add_line(['studentid' => $student->id, 'txntype' => 'credit', 'amount' => -100, 'method' => 'waiver',
+            'description' => 'Waiver']);
+
+        $this->assertTrue($DB->record_exists(billing::TXN, ['id' => $lineid]));
+        $this->assertFalse($DB->is_transaction_started());
+        $this->assertSame(1, (int)$DB->get_field(registration::REG, 'accesspending', ['id' => $badreg]));
+        $this->assertSame(0, (int)$DB->get_field(registration::REG, 'accesspending', ['id' => $goodreg]));
+    }
+
+    /**
+     * Two payments can reach one waiting registration at once. The wait is read under the lock on the registration, so the
+     * request that comes second finds it gone: it opens nothing and tells the student nothing. Here the other request finishes
+     * while this one takes the lock.
+     */
+    public function test_grant_reads_the_wait_under_the_lock_on_the_registration(): void {
+        global $DB;
+        $this->preventResetByRollback();
+        $student = $this->student_who_owes(100);
+        $course = $this->getDataGenerator()->create_course();
+        $regid = $this->waiting_registration($student, (int)$course->id);
+        $this->setAdminUser();
+        $this->record_locks(fn() => $DB->set_field(registration::REG, 'accesspending', 0, ['id' => $regid]));
+
+        payments::grant($regid);
+
+        $this->assertSame('reg' . $regid, recording_lock_factory::$notes[0][1]);
+        $this->assertFalse($DB->record_exists(messages::LOG, ['studentid' => $student->id, 'msgkey' => 'accessopen']));
+        $this->assertFalse(is_enrolled(\context_course::instance($course->id), (int)$student->userid));
+    }
+
+    /**
+     * The lock on the registration lasts until the access is saved, so the next request reads the saved wait.
+     */
+    public function test_grant_saves_under_the_lock_on_the_registration(): void {
+        global $DB;
+        $this->preventResetByRollback();
+        $student = $this->student_who_owes(100);
+        $course = $this->getDataGenerator()->create_course();
+        $regid = $this->waiting_registration($student, (int)$course->id);
+        $this->setAdminUser();
+        $this->record_locks(fn() => [(int)$DB->get_field(registration::REG, 'accesspending', ['id' => $regid]),
+            $DB->is_transaction_started()]);
+
+        payments::grant($regid, 'Sponsor pays next week');
+
+        $expected = [['taken', 'reg' . $regid, [1, false]], ['released', 'reg' . $regid, [0, false]]];
+        $this->assertSame($expected, recording_lock_factory::$notes);
+    }
+
+    /**
+     * Work under the lock that fails gives no course access, then or later.
+     */
+    public function test_failed_work_under_the_lock_gives_no_course_access(): void {
+        global $DB;
+        $this->preventResetByRollback();
+        $student = $this->student_who_owes(100);
+        $course = $this->getDataGenerator()->create_course();
+        $regid = $this->waiting_registration($student, (int)$course->id);
+        $this->setAdminUser();
+
+        $error = $this->error_of(fn() => billing::one_at_a_time(function () use ($student) {
+            billing::add_line(['studentid' => $student->id, 'txntype' => 'credit', 'amount' => -100, 'method' => 'waiver',
+                'description' => 'Waiver']);
+            throw new \moodle_exception('err_busy', 'local_studentrecords');
+        }));
+        // The balance clears some other way. The failed work must not have left a note to look at this student.
+        billing::insert_line(['studentid' => $student->id, 'txntype' => 'credit', 'amount' => -100, 'method' => 'waiver',
+            'description' => 'Waiver']);
+        billing::one_at_a_time(fn() => true);
+
+        $this->assertSame('err_busy', $error);
+        $this->assertSame(0.0, billing::balance((int)$student->id));
+        $this->assertSame(1, (int)$DB->get_field(registration::REG, 'accesspending', ['id' => $regid]));
+    }
+
+    /**
+     * Inside two calls of the lock, course access waits for the outer call to end: the lock is held until then.
+     */
+    public function test_course_access_waits_for_the_outer_lock(): void {
+        global $DB;
+        $this->preventResetByRollback();
+        $student = $this->student_who_owes(100);
+        $course = $this->getDataGenerator()->create_course();
+        $regid = $this->waiting_registration($student, (int)$course->id);
+        $this->setAdminUser();
+        $chargeid = (int)$DB->get_field(billing::TXN, 'id', ['studentid' => $student->id, 'txntype' => 'charge']);
+
+        billing::one_at_a_time(function () use ($chargeid, $regid, $DB) {
+            billing::reverse($chargeid, 'Entered twice');
+            $this->assertSame(1, (int)$DB->get_field(registration::REG, 'accesspending', ['id' => $regid]));
+        });
+
+        $this->assertSame(0, (int)$DB->get_field(registration::REG, 'accesspending', ['id' => $regid]));
+    }
+
+    /**
+     * The proved failure: the provider took the money, and the delivery found the accounts busy. Nothing redelivers, so the
+     * recovery records it, with the date of the payment, and says so in the audit log.
+     */
+    public function test_recover_records_a_delivery_that_found_the_accounts_busy(): void {
+        global $DB;
+        $this->preventResetByRollback();
+        $student = $this->student_who_owes(1000);
+        $reqid = payments::create_request($student, 400);
+        $paymentid = $this->provider_took($reqid, 400, (int)$student->userid);
+        $DB->set_field('payments', 'timecreated', time() - DAYSECS, ['id' => $paymentid]);
+        $this->record_locks(fn() => null);
+        recording_lock_factory::$busy = 'accounts';
+
+        $this->assertSame('err_busy', $this->error_of(fn() => payments::deliver($reqid, $paymentid, (int)$student->userid)));
+        $this->assertSame([], $this->payment_amounts($student));
+        $this->assertSame('open', $DB->get_field(payments::REQ, 'status', ['id' => $reqid]));
+        $this->assertSame(0, payments::recover(), 'The accounts are still busy.');
+        // That is no failure to report: the next run tries again.
+        $this->expectOutputString('');
+
+        recording_lock_factory::$busy = '';
+        $this->assertSame(1, payments::recover());
+
+        $line = $DB->get_record(billing::TXN, ['paymentid' => $paymentid], '*', MUST_EXIST);
+        $this->assertSame(-400.0, (float)$line->amount);
+        $this->assertSame((int)$DB->get_field('payments', 'timecreated', ['id' => $paymentid]), (int)$line->txndate);
+        $this->assertNotEmpty($line->receipt);
+        $this->assertSame(600.0, billing::balance((int)$student->id));
+        $this->assertSame('paid', $DB->get_field(payments::REQ, 'status', ['id' => $reqid]));
+        $this->assertSame(1, $DB->count_records_select(
+            'local_studentrecords_log',
+            'relateduserid = ? AND ' . $DB->sql_like('info', '?'),
+            [$student->userid, '%recovered%']
+        ));
+        $this->assertSame(0, payments::recover());
+    }
+
+    /**
+     * The proved failure, from a real upgrade: a delivery failed three months ago, and Finance entered the money by hand, by
+     * card, with no link to Moodle's payment. The recovery must not read that as a lost payment, so it looks only at payments
+     * from after it started. The earlier ones stay as they are.
+     */
+    public function test_recover_leaves_payments_from_before_it_started(): void {
+        global $DB;
+        $student = $this->student_who_owes(500);
+        $reqid = payments::create_request($student, 100);
+        $paymentid = $this->provider_took($reqid, 100, (int)$student->userid);
+        $DB->set_field('payments', 'timecreated', time() - 90 * DAYSECS, ['id' => $paymentid]);
+        $this->setAdminUser();
+        payments::record($student, 100, 'card', ['reference' => 'paypal order 123, delivery failed']);
+        $this->generator->set_settings(['recoverfrom' => time() - HOURSECS]);
+        $messages = $DB->count_records(messages::LOG, ['studentid' => $student->id, 'msgkey' => 'paymentreceived']);
+
+        $this->assertSame(0, payments::recover());
+
+        $this->assertSame([-100.0], $this->payment_amounts($student));
+        $this->assertSame(400.0, billing::balance((int)$student->id));
+        $this->assertSame(1, $DB->count_records_select(billing::TXN, 'studentid = ? AND receipt IS NOT NULL', [$student->id]));
+        $sent = $DB->count_records(messages::LOG, ['studentid' => $student->id, 'msgkey' => 'paymentreceived']);
+        $this->assertSame($messages, $sent);
+        $this->assertSame('open', $DB->get_field(payments::REQ, 'status', ['id' => $reqid]));
+    }
+
+    /**
+     * A site with no start time gets one on the first run, which records nothing. From then on only newer payments count.
+     */
+    public function test_recover_without_a_start_time_starts_now(): void {
+        global $DB;
+        $student = $this->student_who_owes(500);
+        $reqid = payments::create_request($student, 100);
+        $older = $this->provider_took($reqid, 100, (int)$student->userid);
+        unset_config('recoverfrom', 'local_studentrecords');
+        $before = time();
+
+        $this->assertSame(0, payments::recover());
+
+        $this->assertGreaterThanOrEqual($before, (int)get_config('local_studentrecords', 'recoverfrom'));
+        $this->assertSame([], $this->payment_amounts($student));
+
+        $DB->set_field('payments', 'timecreated', $before - 1, ['id' => $older]);
+        $this->assertSame(0, payments::recover());
+        $this->assertSame([], $this->payment_amounts($student));
+
+        $newreq = payments::create_request($student, 200);
+        $this->provider_took($newreq, 200, (int)$student->userid);
+        $this->assertSame(1, payments::recover());
+        $this->assertSame([-200.0], $this->payment_amounts($student));
+    }
+
+    /**
+     * A payment is recorded once, whichever comes first: the recovery or a late delivery.
+     */
+    public function test_recover_and_a_late_delivery_record_a_payment_once(): void {
+        $student = $this->student_who_owes(1000);
+        $userid = (int)$student->userid;
+        $reqid = payments::create_request($student, 400);
+        $paymentid = $this->provider_took($reqid, 400, $userid);
+        $otherreq = payments::create_request($student, 300);
+        $otherid = $this->provider_took($otherreq, 300, $userid);
+
+        $this->assertTrue(payments::deliver($otherreq, $otherid, $userid));
+        $this->assertSame(1, payments::recover());
+        $this->assertTrue(payments::deliver($reqid, $paymentid, $userid));
+
+        $this->assertSame([-300.0, -400.0], $this->payment_amounts($student));
+    }
+
+    /**
+     * A payment that was recorded and then reversed has its line. The recovery doesn't put it back.
+     */
+    public function test_recover_leaves_a_reversed_payment_alone(): void {
+        global $DB;
+        $student = $this->student_who_owes(1000);
+        $reqid = payments::create_request($student, 400);
+        $paymentid = $this->provider_took($reqid, 400, (int)$student->userid);
+        payments::deliver($reqid, $paymentid, (int)$student->userid);
+        $this->setAdminUser();
+        billing::reverse((int)$DB->get_field(billing::TXN, 'id', ['paymentid' => $paymentid]), 'Card payment disputed');
+
+        $this->assertSame(0, payments::recover());
+
+        $this->assertSame(1000.0, billing::balance((int)$student->id));
+    }
+
+    /**
+     * A second real payment of a request that lost its delivery is money received, so it gets its own line, like a delivery.
+     */
+    public function test_recover_records_a_lost_second_payment(): void {
+        global $DB;
+        $student = $this->student_who_owes(100);
+        $reqid = payments::create_request($student, 100);
+        $first = $this->provider_took($reqid, 100, (int)$student->userid);
+        $second = $this->provider_took($reqid, 100, (int)$student->userid);
+        payments::deliver($reqid, $first, (int)$student->userid);
+
+        $this->assertSame(1, payments::recover());
+
+        $this->assertSame([-100.0, -100.0], $this->payment_amounts($student));
+        $this->assertSame((int)$first, (int)$DB->get_field(payments::REQ, 'paymentid', ['id' => $reqid]));
+        $this->assertTrue($DB->record_exists(billing::TXN, ['paymentid' => $second]));
+    }
+
+    /**
+     * The recovery makes the checks of a delivery: a payment that is not the payment of its request stays off the account. The
+     * task runs every few minutes, so the audit log says so once, not every run.
+     *
+     * @dataProvider recover_misfit_provider
+     * @param array $changes fields of the payment that make it not fit
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('recover_misfit_provider')]
+    public function test_recover_keeps_the_checks_of_a_delivery(array $changes): void {
+        global $DB;
+        $student = $this->student_who_owes(1000);
+        $other = $this->generator->create_user_student();
+        $reqid = payments::create_request($student, 400);
+        $paymentid = $this->provider_took($reqid, 400, (int)$student->userid);
+        $DB->update_record('payments', (object)(['id' => $paymentid] + array_map(
+            fn($value) => $value === 'other' ? (int)$other->userid : $value,
+            $changes
+        )));
+
+        $this->assertSame(0, payments::recover());
+        $this->assertSame(0, payments::recover());
+
+        $this->assertSame([], $this->payment_amounts($student));
+        $this->assertSame('open', $DB->get_field(payments::REQ, 'status', ['id' => $reqid]));
+        $this->assertSame(1, $DB->count_records_select(
+            'local_studentrecords_log',
+            $DB->sql_like('info', '?'),
+            ['%does not fit request%']
+        ));
+    }
+
+    /**
+     * Data for test_recover_keeps_the_checks_of_a_delivery.
+     *
+     * @return array
+     */
+    public static function recover_misfit_provider(): array {
+        return [
+            'too little' => [['amount' => '399.99']],
+            'another currency' => [['currency' => 'EUR']],
+            'another account' => [['accountid' => 999999]],
+            'someone else paid' => [['userid' => 'other']],
+        ];
+    }
+
+    /**
+     * A payment of something else, or for a request that doesn't exist, is not the recovery's business.
+     */
+    public function test_recover_looks_only_at_this_plugins_payments(): void {
+        global $DB;
+        $student = $this->student_who_owes(1000);
+        $reqid = payments::create_request($student, 400);
+        $other = $this->provider_took($reqid, 400, (int)$student->userid);
+        $DB->set_field('payments', 'component', 'enrol_fee', ['id' => $other]);
+        $this->assertSame(0, payments::recover());
+
+        $orphan = $this->provider_took($reqid + 1000, 400, (int)$student->userid);
+        $this->assertSame(0, payments::recover());
+
+        $this->assertSame([], $this->payment_amounts($student));
+        $this->assertFalse($DB->record_exists(billing::TXN, ['paymentid' => $orphan]));
+    }
+
+    /**
+     * One payment that can't be recorded doesn't stop the others.
+     */
+    public function test_recover_goes_on_after_a_payment_that_fails(): void {
+        global $DB;
+        $this->preventResetByRollback();
+        $broken = $this->student_who_owes(1000);
+        $brokenreq = payments::create_request($broken, 400);
+        $this->provider_took($brokenreq, 400, (int)$broken->userid);
+        $student = $this->student_who_owes(500);
+        $reqid = payments::create_request($student, 500);
+        $paymentid = $this->provider_took($reqid, 500, (int)$student->userid);
+        $DB->delete_records(students::TABLE, ['id' => $broken->id]);
+
+        ob_start();
+        $recorded = payments::recover();
+        $output = ob_get_clean();
+
+        $this->assertSame(1, $recorded);
+        $this->assertStringContainsString('not recorded', $output);
+        $this->assertTrue($DB->record_exists(billing::TXN, ['paymentid' => $paymentid]));
     }
 
     /**

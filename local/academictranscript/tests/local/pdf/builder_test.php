@@ -173,6 +173,46 @@ final class builder_test extends \advanced_testcase {
     }
 
     /**
+     * Hours print as they are: 3.58 is not rounded to 3.6.
+     */
+    public function test_hours_keep_their_decimals(): void {
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_academictranscript');
+        $user = $this->getDataGenerator()->create_user();
+        $generator->create_posted_grade(['userid' => $user->id, 'courseid' => $this->getDataGenerator()->create_course()->id,
+            'termid' => $generator->create_term()->id, 'grade' => 'A', 'hours' => 3.58]);
+
+        $text = $this->parse(builder::render(transcript::build($user->id), null))->getText();
+
+        $this->assertStringContainsString('3.58', $text);
+    }
+
+    /**
+     * An Unofficial PDF draws the key of the scale the transcript was counted on, and an issued copy draws the key it stored.
+     */
+    public function test_the_key_comes_from_the_transcript(): void {
+        global $DB;
+        if (!class_exists('\\local_studentrecords\\local\\registration')) {
+            $this->markTestSkipped('Student Records is not installed.');
+        }
+        set_config('source', 'studentrecords', 'local_academictranscript');
+        $this->setAdminUser();
+        $sr = $this->getDataGenerator()->get_plugin_generator('local_studentrecords');
+        $user = $this->getDataGenerator()->create_user();
+        $sr->create_student(['userid' => $user->id, 'studentid' => 'S-1']);
+        $sr->create_scale();
+        $DB->set_field('local_studentrecords_grade', 'description', 'Excellent work', ['letter' => 'A']);
+
+        $data = transcript::build($user->id);
+        $this->assertStringContainsString('Excellent work', $this->parse(builder::render($data, null))->getText());
+
+        $data['key'] = [['grade' => 'Q', 'points' => '9.0', 'percent' => '', 'description' => 'Kept from the issue',
+            'rowspan' => 1, 'ismark' => false, 'ingpa' => true]];
+        $text = $this->parse(builder::render($data, null))->getText();
+        $this->assertStringContainsString('Kept from the issue', $text);
+        $this->assertStringNotContainsString('Excellent work', $text);
+    }
+
+    /**
      * The Transcript Key page, the last page, names the student with the Student ID.
      */
     public function test_key_page_shows_student_id(): void {
@@ -315,6 +355,47 @@ final class builder_test extends \advanced_testcase {
 
         $DB->set_field('course', 'fullname', $fullname, ['id' => SITEID]);
         $SITE->fullname = $fullname;
+    }
+
+    /**
+     * The pages are drawn with the renamed fonts. When an HTML style names a font that TCPDF doesn't know, TCPDF goes on with
+     * the current font and says nothing, so this looks at the fonts each page really uses.
+     */
+    public function test_pages_are_drawn_with_the_renamed_fonts(): void {
+        $this->setAdminUser();
+        $user = $this->getDataGenerator()->create_user();
+        $issue = transcript::issue($user->id, 'Valley College');
+
+        $pdf = builder::render(json_decode($issue->snapshot, true), $issue);
+
+        preg_match_all('~/BaseFont /[A-Z]{6}\+(\S+) /Name /F(\d+) ~', $pdf, $matches);
+        $names = array_combine($matches[2], $matches[1]);
+        $used = [];
+        foreach ($this->parse($pdf)->getPages() as $page) {
+            preg_match_all('~/F(\d+) [\d.]+ Tf~', $page->get('Contents')->getContent(), $calls);
+            foreach ($calls[1] as $number) {
+                $used[$names[$number]] = true;
+            }
+        }
+        $fonts = ['ClouveSans-Bold', 'ClouveSans-Italic', 'ClouveSans-Regular', 'ClouveSans-SemiBold', 'ClouveSerif-Bold'];
+        $this->assertSame([], array_diff($fonts, array_keys($used)));
+    }
+
+    /**
+     * Every font family that the builder names in HTML is registered. For a family it doesn't know, TCPDF goes on with the
+     * current font and says nothing, so a typo in one of these styles would change the look of a transcript without an error.
+     */
+    public function test_html_styles_name_registered_font_families(): void {
+        $source = file_get_contents((new \ReflectionClass(builder::class))->getFileName());
+        preg_match_all('/font-family:(\w+)/', $source, $matches);
+        $doc = new document('P', 'mm', 'LETTER', true, 'UTF-8');
+        $doc->add_fonts();
+        $doc->SetFont('helvetica', '', 9);
+
+        $this->assertNotEmpty($matches[1]);
+        foreach (array_unique($matches[1]) as $family) {
+            $this->assertSame($family, $doc->getFontFamilyName($family));
+        }
     }
 
     /**

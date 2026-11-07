@@ -44,6 +44,17 @@ final class plans_test extends \advanced_testcase {
     }
 
     /**
+     * The terms of a custom plan.
+     *
+     * @param array $changes
+     * @return array
+     */
+    private function custom_terms(array $changes = []): array {
+        return $changes + ['name' => 'Second', 'downtype' => 'percent', 'downvalue' => 25, 'numpay' => 3,
+            'frequency' => 'monthly', 'duemode' => 'relative', 'firstdue' => 30, 'planfee' => 0, 'latefee' => 0, 'gracedays' => 0];
+    }
+
+    /**
      * Make a payment of a plan due some days from now.
      *
      * @param int $planid
@@ -151,10 +162,230 @@ final class plans_test extends \advanced_testcase {
             plans::create($student, (int)$plan->termid, null, ['name' => 'Second', 'downtype' => 'percent', 'downvalue' => 25,
                 'numpay' => 3, 'frequency' => 'monthly', 'duemode' => 'relative', 'firstdue' => 30, 'planfee' => 0,
                 'latefee' => 0, 'gracedays' => 0], 'Custom');
-            $this->fail('A term has one active plan.');
+            $this->fail('A student has one active plan.');
         } catch (\moodle_exception $e) {
             $this->assertSame('err_planexists', $e->errorcode);
         }
+    }
+
+    /**
+     * A student has one active plan. Each plan covers the whole balance, so a second one, for any term, would count the same
+     * payments again. Nothing of the refused plan is saved, and its message says what to do.
+     */
+    public function test_a_second_active_plan_is_refused_for_any_term(): void {
+        $this->preventResetByRollback();
+        [$student, $planid] = $this->student_on_plan(1000);
+        $otherterm = $this->generator->create_term();
+
+        try {
+            plans::create($student, (int)$otherterm->id, null, $this->custom_terms(['planfee' => 50]), 'Custom');
+            $this->fail('A student has one active plan.');
+        } catch (\moodle_exception $e) {
+            $this->assertSame('err_planexists', $e->errorcode);
+            $this->assertStringContainsString(get_string('err_planexists', 'local_studentrecords'), $e->getMessage());
+        }
+
+        $this->assertSame([$planid], array_map('intval', array_keys(plans::for_student((int)$student->id))));
+        $this->assertSame(1000.0, billing::balance((int)$student->id));
+    }
+
+    /**
+     * The way forward works: a plan that was cancelled or finished leaves room for a new one, for any term.
+     */
+    public function test_a_new_plan_after_the_old_one_ended(): void {
+        global $DB;
+        [$student, $planid] = $this->student_on_plan(1000);
+        $term = $this->generator->create_term();
+
+        plans::cancel($planid, 'Moved to a shorter plan');
+        $second = plans::create($student, (int)$term->id, null, $this->custom_terms(), 'Custom');
+        payments::record($student, 1000, 'check');
+        $this->assertSame('completed', $DB->get_field(plans::STUPLANS, 'status', ['id' => $second]));
+        // That payment is from before the next plan, which counts what is paid from the second it starts.
+        $DB->set_field(billing::TXN, 'timecreated', time() - DAYSECS, ['studentid' => $student->id]);
+        $this->generator->create_charge(['studentid' => $student->id, 'amount' => 300]);
+        $third = plans::create($student, (int)$this->generator->create_term()->id, null, $this->custom_terms(), 'Custom');
+
+        $this->assertSame('active', $DB->get_field(plans::STUPLANS, 'status', ['id' => $third]));
+    }
+
+    /**
+     * Plans that overlapped before this rule stay as they are: both stay active, and the daily task handles both.
+     */
+    public function test_plans_that_already_overlap_are_left_alone(): void {
+        global $DB;
+        [$student, $planid] = $this->student_on_plan(1000);
+        $old = $DB->get_record(plans::STUPLANS, ['id' => $planid]);
+        $second = (int)$DB->insert_record(plans::STUPLANS, (object)(['termid' => $this->generator->create_term()->id] +
+            array_diff_key((array)$old, ['id' => 1])));
+        foreach ($DB->get_records(plans::INSTS, ['stuplanid' => $planid]) as $inst) {
+            $DB->insert_record(plans::INSTS, (object)(['stuplanid' => $second] + array_diff_key((array)$inst, ['id' => 1])));
+        }
+
+        $this->due_in($planid, 0, -10);
+        $this->due_in($second, 0, -10);
+
+        plans::sync($student);
+        $counts = plans::daily();
+
+        $this->assertSame('active', $DB->get_field(plans::STUPLANS, 'status', ['id' => $planid]));
+        $this->assertSame('active', $DB->get_field(plans::STUPLANS, 'status', ['id' => $second]));
+        $this->assertSame(['reminders' => 0, 'latefees' => 2, 'holds' => 2], $counts);
+        foreach ([$planid, $second] as $id) {
+            $first = $DB->get_record(plans::INSTS, ['stuplanid' => $id, 'seq' => 0]);
+            $this->assertNotEmpty($first->latefeeid, 'late fee of plan ' . $id);
+            $this->assertNotEmpty($first->holdid, 'hold of plan ' . $id);
+        }
+    }
+
+    /**
+     * When two completed plans stop being paid in full at once, the newest reopens: it is the one the student is following. The
+     * older one stays completed and Finance is told.
+     */
+    public function test_the_newest_of_two_plans_reopens(): void {
+        global $DB;
+        [$student, $older] = $this->student_on_plan(1000);
+        $plan = $DB->get_record(plans::STUPLANS, ['id' => $older]);
+        $newer = (int)$DB->insert_record(plans::STUPLANS, (object)(['termid' => $this->generator->create_term()->id,
+            'name' => 'Newer', 'timeapproved' => (int)$plan->timeapproved + 60] + array_diff_key((array)$plan, ['id' => 1])));
+        $DB->set_field(plans::STUPLANS, 'status', 'completed', ['studentid' => $student->id]);
+        foreach ($DB->get_records(plans::INSTS, ['stuplanid' => $older]) as $inst) {
+            $DB->insert_record(plans::INSTS, (object)(['stuplanid' => $newer] + array_diff_key((array)$inst, ['id' => 1])));
+        }
+        $DB->set_field(plans::INSTS, 'status', 'paid', []);
+        \core\notification::fetch();
+
+        plans::sync($student);
+
+        $this->assertSame('active', $DB->get_field(plans::STUPLANS, 'status', ['id' => $newer]));
+        $this->assertSame('completed', $DB->get_field(plans::STUPLANS, 'status', ['id' => $older]));
+        $this->assertCount(1, \core\notification::fetch());
+    }
+
+    /**
+     * The fall plan was paid in full and the spring plan was given. Then the fall check comes back.
+     *
+     * @return array student, fall plan id, spring plan id, spring term id, fall payment line id
+     */
+    private function fall_check_returned_after_a_spring_plan(): array {
+        global $DB;
+        $student = $this->generator->create_user_student();
+        $this->generator->create_charge(['studentid' => $student->id, 'amount' => 1000]);
+        $fall = plans::create($student, (int)$this->generator->create_term()->id, null, $this->custom_terms(['name' => 'Fall',
+            'latefee' => 25]), 'Custom');
+        $DB->set_field(plans::STUPLANS, 'timeapproved', time() - 60 * DAYSECS, ['id' => $fall]);
+        $line = payments::record($student, 1000, 'check');
+        $DB->set_field(billing::TXN, 'timecreated', time() - 50 * DAYSECS, ['id' => $line]);
+        plans::sync($student);
+        $this->assertSame('completed', $DB->get_field(plans::STUPLANS, 'status', ['id' => $fall]));
+        $this->generator->create_charge(['studentid' => $student->id, 'amount' => 800]);
+        $term = (int)$this->generator->create_term()->id;
+        $spring = plans::create($student, $term, null, $this->custom_terms(['name' => 'Spring', 'latefee' => 25]), 'Custom');
+
+        billing::reverse($line, 'Check returned');
+
+        return [$student, $fall, $spring, $term, $line];
+    }
+
+    /**
+     * A student has one active plan, so a returned payment doesn't reopen a completed plan while another plan is active. The
+     * active plan isn't touched: the returned payment was made before it started.
+     */
+    public function test_a_returned_payment_does_not_reopen_a_plan_next_to_an_active_one(): void {
+        global $DB;
+        [$student, $fall, $spring] = $this->fall_check_returned_after_a_spring_plan();
+
+        $this->assertSame('completed', $DB->get_field(plans::STUPLANS, 'status', ['id' => $fall]));
+        $this->assertSame('active', $DB->get_field(plans::STUPLANS, 'status', ['id' => $spring]));
+        $this->assertSame(0.0, plans::paid_toward($DB->get_record(plans::STUPLANS, ['id' => $spring])));
+        $this->assertSame(1800.0, billing::balance((int)$student->id));
+    }
+
+    /**
+     * After that, a new payment counts on the active plan, the late work happens once, for the active plan only, and the
+     * student's term keeps its plan.
+     */
+    public function test_the_active_plan_works_after_a_returned_payment_of_an_older_plan(): void {
+        global $DB;
+        [$student, $fall, $spring, $term] = $this->fall_check_returned_after_a_spring_plan();
+        $down = (float)$DB->get_field(plans::INSTS, 'amount', ['stuplanid' => $spring, 'seq' => 0]);
+
+        payments::record($student, $down, 'check');
+
+        $this->assertTrue(plans::plan_ok($student, $term));
+        $this->assertSame('paid', $DB->get_field(plans::INSTS, 'status', ['stuplanid' => $spring, 'seq' => 0]));
+
+        $this->due_in($spring, 1, -10);
+        $this->due_in($fall, 1, -10);
+        $counts = plans::daily();
+
+        $this->assertSame(['reminders' => 0, 'latefees' => 1, 'holds' => 1], $counts);
+        $this->assertSame(1, $DB->count_records(academic::HOLDS, ['studentid' => $student->id, 'holdtype' => 'financial']));
+        $this->assertSame('active', $DB->get_field(plans::STUPLANS, 'status', ['id' => $spring]));
+        $this->assertSame('completed', $DB->get_field(plans::STUPLANS, 'status', ['id' => $fall]));
+    }
+
+    /**
+     * Finance is told plainly what happened: at once, on the page that made the change, and for good in the note of the plan.
+     * Bringing the plans up to date again doesn't say it twice.
+     */
+    public function test_finance_is_told_when_a_plan_cannot_reopen(): void {
+        global $DB;
+        \core\notification::fetch();
+        [$student, $fall] = $this->fall_check_returned_after_a_spring_plan();
+        $text = get_string('plan_notreopened', 'local_studentrecords', (object)['plan' => 'Fall', 'active' => 'Spring']);
+
+        $notices = \core\notification::fetch();
+        $this->assertCount(1, $notices);
+        $this->assertSame(\core\output\notification::NOTIFY_WARNING, $notices[0]->get_message_type());
+        $this->assertSame(s($text), $notices[0]->get_message());
+        $this->assertStringContainsString($text, $DB->get_field(plans::STUPLANS, 'note', ['id' => $fall]));
+        $this->assertTrue($DB->record_exists('local_studentrecords_log', ['objecttype' => 'plan', 'objectid' => $fall,
+            'info' => 'not reopened: another plan is active']));
+
+        plans::sync($student);
+        plans::daily();
+
+        $this->assertCount(0, \core\notification::fetch());
+        $this->assertSame(1, substr_count($DB->get_field(plans::STUPLANS, 'note', ['id' => $fall]), $text));
+    }
+
+    /**
+     * Once no other plan is active, the plan that could not reopen does: the money is still owed.
+     */
+    public function test_a_plan_reopens_when_the_other_plan_has_ended(): void {
+        global $DB;
+        [$student, $fall, $spring] = $this->fall_check_returned_after_a_spring_plan();
+
+        plans::cancel($spring, 'Moved to one plan');
+        plans::sync($student);
+
+        $this->assertSame('active', $DB->get_field(plans::STUPLANS, 'status', ['id' => $fall]));
+    }
+
+    /**
+     * Only a reversal of a line from before a plan stays out of its total. A payment made on the plan and reversed counts
+     * back, and so does a reversal of the older line on the older plan.
+     */
+    public function test_paid_toward_leaves_out_reversals_of_older_lines(): void {
+        global $DB;
+        $student = $this->generator->create_user_student();
+        $this->generator->create_charge(['studentid' => $student->id, 'amount' => 1000]);
+        $older = payments::record($student, 200, 'check');
+        $DB->set_field(billing::TXN, 'timecreated', time() - 50 * DAYSECS, ['id' => $older]);
+        $id = plans::create($student, (int)$this->generator->create_term()->id, null, $this->custom_terms(), 'Custom');
+        $plan = $DB->get_record(plans::STUPLANS, ['id' => $id]);
+        $newer = payments::record($student, 100, 'check');
+        $this->assertSame(100.0, plans::paid_toward($plan));
+
+        billing::reverse($older, 'Check returned');
+        $this->assertSame(100.0, plans::paid_toward($plan));
+
+        billing::reverse($newer, 'Check returned');
+        $this->assertSame(0.0, plans::paid_toward($plan));
+
+        $plan->timeapproved = time() - 60 * DAYSECS;
+        $this->assertSame(0.0, plans::paid_toward($plan));
     }
 
     /**
@@ -203,6 +434,25 @@ final class plans_test extends \advanced_testcase {
         $this->assertSame(['reminders' => 0, 'latefees' => 0, 'holds' => 0], $second);
         $this->assertSame(1025.0, billing::balance((int)$student->id));
         $this->assertSame(1, $DB->count_records(academic::HOLDS, ['studentid' => $student->id, 'holdtype' => 'financial']));
+    }
+
+    /**
+     * The reason of a late payment hold says what the hold is for, without an amount: it shows on the record's Holds tab to
+     * staff who don't see the account, and the account shows the money.
+     */
+    public function test_late_hold_says_why_without_an_amount(): void {
+        global $DB;
+        [$student, $planid] = $this->student_on_plan(1000);
+        $this->due_in($planid, 0, -10);
+        $due = (int)$DB->get_field(plans::INSTS, 'duedate', ['stuplanid' => $planid, 'seq' => 0]);
+
+        plans::daily();
+
+        $reason = $DB->get_field(academic::HOLDS, 'reason', ['studentid' => $student->id, 'holdtype' => 'financial']);
+        $this->assertStringContainsString('Late payment on the plan "Three payments"', $reason);
+        $this->assertStringContainsString(catalog::show_date($due), $reason);
+        $this->assertStringNotContainsString('$', $reason);
+        $this->assertStringNotContainsString('250.00', $reason);
     }
 
     /**

@@ -76,14 +76,14 @@ class builder {
             $specs[] = ['title' => get_string('transfercredit', 'local_academictranscript'), 'right' => $group['institution'],
                 'rows' => $group['rows'],
                 'totals' => [get_string('transferaccepted', 'local_academictranscript'),
-                    get_string('earnedx', 'local_academictranscript', self::n1($group['earned']))]];
+                    get_string('earnedx', 'local_academictranscript', self::hours($group['earned']))]];
         }
         foreach ($data['terms'] as $term) {
             $range = $term['startdate'] ? transcript::shortdate($term['startdate']) . ' - ' .
                 transcript::shortdate($term['enddate']) : '';
             $specs[] = ['title' => $term['name'], 'right' => $range, 'rows' => $term['rows'],
-                'totals' => [get_string('termtotals', 'local_academictranscript', ['earned' => self::n1($term['earned']),
-                    'hours' => self::n1($term['gpahours']), 'qp' => self::n2($term['qp'])]),
+                'totals' => [get_string('termtotals', 'local_academictranscript', ['earned' => self::hours($term['earned']),
+                    'hours' => self::hours($term['gpahours']), 'qp' => self::n2($term['qp'])]),
                     get_string('termgpa', 'local_academictranscript', $term['gpa'] === '' ? '-' : $term['gpa'])]];
         }
         if (!$specs) {
@@ -224,7 +224,7 @@ class builder {
         $doc->SetMargins(self::X0, self::TOP, self::X0);
         $doc->SetAutoPageBreak(false);
         $doc->setCellHeightRatio(1.15);
-        $doc->SetFont('sourcesans3', '', 9);
+        $doc->SetFont('clouvesans', '', 9);
         $doc->SetTextColor(27, 31, 39);
         return $doc;
     }
@@ -297,13 +297,13 @@ class builder {
     }
 
     /**
-     * Number with one decimal.
+     * Hours: one decimal, or two when the value has them.
      *
      * @param float|null $n
      * @return string
      */
-    protected static function n1(?float $n): string {
-        return $n === null ? '' : number_format($n, 1);
+    protected static function hours(?float $n): string {
+        return $n === null ? '' : scale::number($n);
     }
 
     /**
@@ -362,17 +362,17 @@ class builder {
                 $parts[] = $v;
             }
         }
-        $left = '<div style="font-family:sourceserif4;font-weight:bold;font-size:19pt;color:' . self::$accent . ';">'
+        $left = '<div style="font-family:clouveserif;font-weight:bold;font-size:19pt;color:' . self::$accent . ';">'
             . s(self::school()) . '</div><div style="font-size:8.5pt;color:' . self::MUTED . ';">'
             . s(implode(' · ', $parts)) . '</div>';
         $doc->writeHTMLCell(self::X0 + self::$w - $rightw - 3 - $textx, 0, $textx, $top + 1, $left, 0, 1);
         $lefty = $doc->GetY();
 
         $title = get_string($official ? 'doctitle_official' : 'doctitle_unofficial', 'local_academictranscript');
-        $doc->SetFont('sourceserif4', 'B', 11);
+        $doc->SetFont('clouveserif', 'B', 11);
         $doc->SetTextColor(27, 31, 39);
         $doc->MultiCell($rightw, 0, $title, 0, 'R', false, 1, self::X0 + self::$w - $rightw, $top + 2);
-        $doc->SetFont('sourcesans3', '', 8.5);
+        $doc->SetFont('clouvesans', '', 8.5);
         $doc->SetTextColor(61, 68, 82);
         $doc->SetX(self::X0 + self::$w - $rightw);
         $doc->Cell($rightw, 4, get_string(
@@ -384,7 +384,7 @@ class builder {
         $doc->SetLineStyle(['width' => 0.5, 'dash' => 0, 'color' => self::$accentrgb]);
         $doc->Line(self::X0, $y, self::X0 + self::$w, $y);
         $doc->SetTextColor(27, 31, 39);
-        $doc->SetFont('sourcesans3', '', 9);
+        $doc->SetFont('clouvesans', '', 9);
         return $y + 3;
     }
 
@@ -401,7 +401,7 @@ class builder {
         return '<td width="' . $width . '"' . ($colspan > 1 ? ' colspan="' . $colspan . '"' : '') . '>'
             . '<span style="font-size:7pt;color:#555c69;">'
             . s(\core_text::strtoupper(get_string($labelkey, 'local_academictranscript')))
-            . '</span><br/><span style="font-family:sourcesans3semib;font-size:9.5pt;">' . s($value === '' ? '-' : $value)
+            . '</span><br/><span style="font-family:clouvesanssemib;font-size:9.5pt;">' . s($value === '' ? '-' : $value)
             . '</span></td>';
     }
 
@@ -478,13 +478,13 @@ class builder {
     protected static function block_html(array $spec): string {
         $html = '<table cellpadding="0.8" style="font-size:8.5pt;"><tr>'
             . '<td width="60%" style="font-weight:bold;">' . s($spec['title']) . '</td>'
-            . '<td width="40%" align="right" style="font-family:sourcesans3semib;color:' . self::MUTED . ';">'
+            . '<td width="40%" align="right" style="font-family:clouvesanssemib;color:' . self::MUTED . ';">'
             . s($spec['right']) . '</td></tr>';
         foreach ($spec['rows'] as $row) {
             $qp = $row['qp'] === null ? '-' : self::n2($row['qp']);
             $html .= '<tr nobr="true"><td width="17%">' . s($row['code']) . '</td>'
                 . '<td width="47%">' . s($row['title']) . '</td>'
-                . '<td width="11%" align="right">' . self::n1($row['hours']) . '</td>'
+                . '<td width="11%" align="right">' . self::hours($row['hours']) . '</td>'
                 . '<td width="11%" align="right">' . s($row['grade']) . '</td>'
                 . '<td width="14%" align="right">' . $qp . '</td></tr>';
             foreach ($row['notes'] as $note) {
@@ -512,7 +512,7 @@ class builder {
         return '<table cellpadding="3" style="border:0.4px solid ' . self::$accent . ';"><tr><td>'
             . '<span style="font-size:7.5pt;font-weight:bold;color:' . self::$accent . ';">'
             . s(\core_text::strtoupper(get_string('degreeawarded', 'local_academictranscript'))) . '</span><br/>'
-            . '<span style="font-family:sourcesans3semib;font-size:9.5pt;">' . s($data['qualification']) . '</span>'
+            . '<span style="font-family:clouvesanssemib;font-size:9.5pt;">' . s($data['qualification']) . '</span>'
             . ($line !== '' ? '<br/><span style="font-size:8.5pt;color:' . self::MUTED . ';">' . s($line) . '</span>' : '')
             . '</td></tr></table>';
     }
@@ -543,8 +543,8 @@ class builder {
             $gpa = $v['gpa'] === '' ? '-' : $v['gpa'];
             $gpastyle = $key === 'summary_overall' ? 'color:' . self::$accent . ';' : '';
             $html .= '<tr><td width="36%" style="' . $style . '">' . s(get_string($key, 'local_academictranscript')) . '</td>'
-                . '<td width="16%" align="right" style="' . $style . '">' . self::n1($v['earned']) . '</td>'
-                . '<td width="16%" align="right" style="' . $style . '">' . self::n1($v['gpahours']) . '</td>'
+                . '<td width="16%" align="right" style="' . $style . '">' . self::hours($v['earned']) . '</td>'
+                . '<td width="16%" align="right" style="' . $style . '">' . self::hours($v['gpahours']) . '</td>'
                 . '<td width="16%" align="right" style="' . $style . '">' . self::n2($v['qp']) . '</td>'
                 . '<td width="16%" align="right" style="' . $style . $gpastyle . '">' . ($transfer ? '-' : s($gpa))
                 . '</td></tr>';
@@ -599,7 +599,7 @@ class builder {
             $doc->SetLineStyle(['width' => 0.4, 'dash' => '1,1', 'color' => $accent]);
             $doc->Circle($cx, $cy, 12);
             $doc->SetLineStyle(['width' => 0.3, 'dash' => 0, 'color' => $accent]);
-            $doc->SetFont('sourcesans3', 'B', 7);
+            $doc->SetFont('clouvesans', 'B', 7);
             $doc->SetTextColor(...self::$accentrgb);
             $doc->MultiCell(20, 0, get_string('sig_seal', 'local_academictranscript'), 0, 'C', false, 1, $cx - 10, $cy - 4);
         }
@@ -613,7 +613,7 @@ class builder {
             )]))->out(false);
             $qrstyle = ['border' => false, 'padding' => 0, 'fgcolor' => [0, 0, 0], 'bgcolor' => false];
             $doc->write2DBarcode($qrurl, 'QRCODE,M', $mx + $mw + 3, $y + 1, 22, 22, $qrstyle, 'N');
-            $doc->SetFont('sourcesans3', '', 6.5);
+            $doc->SetFont('clouvesans', '', 6.5);
             $doc->SetTextColor(61, 68, 82);
             $doc->MultiCell(22, 0, get_string('qr_scan', 'local_academictranscript'), 0, 'C', false, 1, $mx + $mw + 3, $y + 23);
         }
@@ -627,7 +627,7 @@ class builder {
                 $doc->Image('@' . $sigimage, $mx, $y + 2.5, $mw, 10, '', '', '', true, 300, '', false, false, 0, 'LB');
             }
             $doc->Line($mx, $y + 13, $mx + $mw, $y + 13);
-            $doc->SetFont('sourcesans3', 'B', 8.5);
+            $doc->SetFont('clouvesans', 'B', 8.5);
             $who = trim($name . ($name !== '' && $title !== '' ? ', ' : '') . $title);
             $doc->MultiCell(
                 $mw,
@@ -642,7 +642,7 @@ class builder {
             );
         } else {
             $doc->Line($mx, $y + 11, $mx + $mw, $y + 11);
-            $doc->SetFont('sourcesans3', '', 8);
+            $doc->SetFont('clouvesans', '', 8);
             $doc->MultiCell(
                 $mw,
                 0,
@@ -656,17 +656,17 @@ class builder {
             );
             $half = ($mw - 6) / 2;
             if ($title !== '') {
-                $doc->SetFont('sourcesans3', '', 8.5);
+                $doc->SetFont('clouvesans', '', 8.5);
                 $doc->MultiCell($half, 0, $title, 0, 'L', false, 1, $mx, $y + 17.2);
             }
             $doc->Line($mx, $y + 21.5, $mx + $half, $y + 21.5);
             $doc->Line($mx + $half + 6, $y + 21.5, $mx + $mw, $y + 21.5);
-            $doc->SetFont('sourcesans3', '', 8);
+            $doc->SetFont('clouvesans', '', 8);
             $doc->MultiCell($half, 0, get_string('sig_title', 'local_academictranscript'), 0, 'L', false, 1, $mx, $y + 21.9);
             $datelabel = get_string('sig_date', 'local_academictranscript');
             $doc->MultiCell($half, 0, $datelabel, 0, 'L', false, 1, $mx + $half + 6, $y + 21.9);
         }
-        $doc->SetFont('sourcesans3', 'I', 7.5);
+        $doc->SetFont('clouvesans', 'I', 7.5);
         $doc->SetTextColor(61, 68, 82);
         $note = $issue ? ($signed ? get_string('digitallysigned', 'local_academictranscript') :
             get_string('notsigned', 'local_academictranscript')) : get_string('unofficialnote', 'local_academictranscript');
@@ -694,7 +694,7 @@ class builder {
         $html = '<table cellpadding="0.4" style="font-size:7.5pt;">';
         foreach ($rows as $key => $value) {
             $html .= '<tr><td width="30%" style="color:#555c69;">' . s(get_string($key, 'local_academictranscript')) . '</td>'
-                . '<td width="70%" style="font-family:sourcesans3semib;">' . s($value === '' ? '-' : $value) . '</td></tr>';
+                . '<td width="70%" style="font-family:clouvesanssemib;">' . s($value === '' ? '-' : $value) . '</td></tr>';
         }
         $html .= '</table>';
         $h = self::measure($html, 66);
@@ -712,12 +712,12 @@ class builder {
         $doc->SetAutoPageBreak(true, 14);
         $doc->AddPage();
         $top = self::TOP;
-        $left = '<div style="font-family:sourceserif4;font-weight:bold;font-size:16pt;color:' . self::$accent . ';">'
+        $left = '<div style="font-family:clouveserif;font-weight:bold;font-size:16pt;color:' . self::$accent . ';">'
             . s(get_string('transcriptkey', 'local_academictranscript')) . '</div><div style="font-size:8.5pt;color:' . self::MUTED
             . ';">' . s(self::school() . ' · ' . get_string('registraroffice', 'local_academictranscript')) . '</div>';
         $doc->writeHTMLCell(120, 0, self::X0, $top, $left, 0, 1);
         $lefty = $doc->GetY();
-        $doc->SetFont('sourcesans3', '', 8.5);
+        $doc->SetFont('clouvesans', '', 8.5);
         $doc->SetTextColor(61, 68, 82);
         $doc->SetXY(self::X0 + self::$w - 70, $top + 3);
         $student = $data['fullname'];
@@ -737,19 +737,19 @@ class builder {
         $doc->SetTextColor(27, 31, 39);
         $y += 3;
 
-        $h2 = fn($key) => '<div style="font-family:sourceserif4;font-weight:bold;font-size:11pt;color:' . self::$accent . ';">'
+        $h2 = fn($key) => '<div style="font-family:clouveserif;font-weight:bold;font-size:11pt;color:' . self::$accent . ';">'
             . s(get_string($key, 'local_academictranscript')) . '</div>';
         $th = 'style="font-weight:bold;font-size:7.5pt;color:' . self::MUTED . ';border-bottom:0.3px solid #9aa1ad;"';
         $up = fn($key) => s(\core_text::strtoupper(get_string($key, 'local_academictranscript')));
         $rowborder = 'border-bottom:0.2px solid #e1e4ea;';
 
-        // Grades used in GPA: the approved scale, all 12 grades with percentages.
+        // Grades used in GPA: the scale the transcript was counted on.
         $html = $h2('key_gradesused') . '<table cellpadding="1" style="font-size:8.5pt;"><tr>'
             . '<td width="10%" ' . $th . '>' . $up('col_grade') . '</td>'
             . '<td width="18%" align="center" ' . $th . '>' . $up('col_pointsperunit') . '</td>'
             . '<td width="20%" align="center" ' . $th . '>' . $up('col_percentage') . '</td>'
             . '<td width="52%" ' . $th . '>' . $up('col_description') . '</td></tr>';
-        $keyrows = $data['key'] ?? scale::scale_rows();
+        $keyrows = $data['key'] ?? transcript::key_rows($data);
         foreach ($keyrows as $row) {
             if (!empty($row['ismark'])) {
                 continue;
@@ -793,7 +793,7 @@ class builder {
                 continue;
             }
             $title = transcript::setting($key . '_title', get_string($key . '_title', 'local_academictranscript'));
-            $sections[] = '<div style="font-family:sourceserif4;font-weight:bold;font-size:11pt;color:' . self::$accent . ';">'
+            $sections[] = '<div style="font-family:clouveserif;font-weight:bold;font-size:11pt;color:' . self::$accent . ';">'
                 . s($title) . '</div><div style="font-size:8.5pt;">' . nl2br(s(strtr($text, $replace))) . '</div>';
         }
         $html = '<table cellpadding="0" cellspacing="0">';

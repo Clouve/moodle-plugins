@@ -159,8 +159,9 @@ class calculator {
      * Work out every attempt and the totals.
      *
      * Each attempt: ['code' => course code, 'group' => term key, 'order' => term order (int),
-     * 'time' => int, 'hours' => float, 'grade' => string]. Attempts of the same code (case-insensitive)
-     * are repeats. Attempts that a repeat rule leaves out keep their row but are 'excluded'.
+     * 'time' => int, 'hours' => float, 'grade' => string]. When the source decides, 'earns' => bool says whether the attempt
+     * earns its hours, and 'points' => float|null gives its grade points, null when it is out of the GPA. Attempts of the same
+     * code (case-insensitive) are repeats. Attempts that a repeat rule leaves out keep their row but are 'excluded'.
      *
      * Grade points and hours are used to the hundredth, as the database keeps them, and the arithmetic is exact. The
      * quality points of an attempt, of a group and of the whole record are each rounded once to two decimals, and a value
@@ -207,11 +208,12 @@ class calculator {
         foreach ($attempts as $i => $a) {
             $grade = (string)$a['grade'];
             $hours = (int)round((float)$a['hours'] * 100);
-            $points = $this->points($grade);
+            $sourcepoints = array_key_exists('points', $a);
+            $points = $sourcepoints ? $a['points'] : $this->points($grade);
             $qp = $points === null ? null : (int)round($points * 100) * $hours;
             $isexcluded = !empty($excluded[$i]);
-            $ingpa = $this->in_gpa($grade) && !$isexcluded;
-            $earned = $this->earns($grade) && !$isexcluded;
+            $ingpa = ($sourcepoints ? $points !== null : $this->in_gpa($grade)) && !$isexcluded;
+            $earned = ($a['earns'] ?? $this->earns($grade)) && !$isexcluded;
             $attempts[$i]['points'] = $points;
             $attempts[$i]['qp'] = $qp === null ? null : self::divide_rounded($qp, 100) / 100.0;
             $attempts[$i]['ingpa'] = $ingpa;

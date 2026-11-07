@@ -178,6 +178,25 @@ class aid {
     }
 
     /**
+     * The account lines of a student's aid of an award year, newest first: each disbursement, each return of aid, and each
+     * reversal of one. A return of aid belongs to the award year of its term.
+     *
+     * @param int $studentid
+     * @param string $awardyear
+     * @return array
+     */
+    public static function lines(int $studentid, string $awardyear): array {
+        global $DB;
+        return $DB->get_records_sql("SELECT t.* FROM {" . billing::TXN . "} t
+                                  LEFT JOIN {" . self::AWARDS . "} a ON a.id = t.aidid
+                                  LEFT JOIN {" . refunds::REFUNDS . "} r ON r.id = t.refundid AND r.reason = 'aidreturn'
+                                      WHERE t.studentid = ? AND (a.awardyear = ? OR (r.id IS NOT NULL AND t.termid IN (
+                                            SELECT y.termid FROM {" . self::AWARDS . "} y
+                                             WHERE y.studentid = ? AND y.awardyear = ?)))
+                                   ORDER BY t.txndate DESC, t.id DESC", [$studentid, $awardyear, $studentid, $awardyear]);
+    }
+
+    /**
      * Add or change an aid award (change history kept).
      *
      * @param \stdClass $student

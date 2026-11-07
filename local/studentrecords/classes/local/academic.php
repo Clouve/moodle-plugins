@@ -166,6 +166,21 @@ class academic {
     }
 
     /**
+     * Whether the current user may decide a request: it waits for a decision, they hold the approve capability, they didn't
+     * ask for it and it isn't their own grade. The page uses this to offer the buttons. A decision itself goes through
+     * decide_change(), which checks all of it again.
+     *
+     * @param \stdClass $change a row of changes()
+     * @return bool
+     */
+    public static function can_decide(\stdClass $change): bool {
+        global $USER;
+        return $change->state === 'pending' && (int)$change->requestedby !== (int)$USER->id &&
+            (int)$change->userid !== (int)$USER->id &&
+            has_capability('local/studentrecords:approvegradechange', \context_system::instance());
+    }
+
+    /**
      * Check and save a decision. The caller holds the lock on the registration, so a double click decides only once.
      *
      * @param int $changeid
@@ -205,11 +220,11 @@ class academic {
             }
             audit::log('update', 'student', (int)$student->id, (int)$student->userid, 'grade change ' .
                 ($approve ? 'approved' : 'rejected') . ' ' . $change->oldgrade . ' -> ' . $change->newgrade);
-            $transaction->allow_commit();
         } catch (\Throwable $e) {
             // The page shows the error and carries on, so the transaction must end here.
             $transaction->rollback($e);
         }
+        records::commit($transaction, $student);
     }
 
     /**
@@ -232,7 +247,8 @@ class academic {
             $params[] = $studentid;
         }
         return $DB->get_records_sql("SELECT g.*, r.studentid, c.code, c.title, o.section, t.name AS termname, s.studentid AS sid,
-                                            s.legalfirstname, s.legalmiddlename, s.legallastname, s.preferredname
+                                            s.userid, s.ferpaoptout, s.legalfirstname, s.legalmiddlename, s.legallastname,
+                                            s.preferredname
                                        FROM {" . self::CHANGES . "} g
                                        JOIN {" . registration::REG . "} r ON r.id = g.regid
                                        JOIN {" . registration::OFFER . "} o ON o.id = r.offerid

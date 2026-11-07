@@ -89,25 +89,28 @@ class letters {
     }
 
     /**
-     * Issue a letter: number, recipient and facts are kept; the audit log notes it.
+     * Issue a letter: number, recipient and facts are kept; the audit log notes it. Letters are numbered one at a time, or two
+     * could work out the same number.
      *
      * @param \stdClass $student
      * @param string $recipient to whom it is addressed (empty = to whom it may concern)
      * @return int letter id
      */
     public static function issue(\stdClass $student, string $recipient): int {
-        global $DB, $USER;
         $facts = self::facts($student);
-        $year = userdate(time(), '%Y', catalog::timezone(), false);
-        $seq = $DB->count_records_select(self::TABLE, $DB->sql_like('letterno', '?'), ['L' . $year . '-%']) + 1;
-        do {
-            $no = 'L' . $year . '-' . str_pad((string)$seq++, 5, '0', STR_PAD_LEFT);
-        } while ($DB->record_exists(self::TABLE, ['letterno' => $no]));
-        $id = (int)$DB->insert_record(self::TABLE, (object)['studentid' => $student->id, 'letterno' => $no,
-            'recipient' => \core_text::substr(trim($recipient), 0, 255), 'termid' => $facts['termid'],
-            'content' => json_encode($facts), 'issuedby' => $USER->id, 'timeissued' => time()]);
-        audit::log('export', 'letter', $id, (int)$student->userid, $no . ($recipient !== '' ? ' to ' . trim($recipient) : ''));
-        return $id;
+        return registration::with_lock('letterno', function () use ($student, $recipient, $facts) {
+            global $DB, $USER;
+            $year = userdate(time(), '%Y', catalog::timezone(), false);
+            $seq = $DB->count_records_select(self::TABLE, $DB->sql_like('letterno', '?'), ['L' . $year . '-%']) + 1;
+            do {
+                $no = 'L' . $year . '-' . str_pad((string)$seq++, 5, '0', STR_PAD_LEFT);
+            } while ($DB->record_exists(self::TABLE, ['letterno' => $no]));
+            $id = (int)$DB->insert_record(self::TABLE, (object)['studentid' => $student->id, 'letterno' => $no,
+                'recipient' => \core_text::substr(trim($recipient), 0, 255), 'termid' => $facts['termid'],
+                'content' => json_encode($facts), 'issuedby' => $USER->id, 'timeissued' => time()]);
+            audit::log('export', 'letter', $id, (int)$student->userid, $no . ($recipient !== '' ? ' to ' . trim($recipient) : ''));
+            return $id;
+        });
     }
 
     /**

@@ -14,7 +14,7 @@ require_once($CFG->libdir . '/formslib.php');
  */
 class reverse extends \moodleform {
     /**
-     * Form definition. Custom data: text (the line being reversed).
+     * Form definition. Custom data: text (the line being reversed), info (what reversing does, when not the usual text).
      */
     protected function definition() {
         $m = $this->_form;
@@ -24,7 +24,7 @@ class reverse extends \moodleform {
             $m->setType($f, $type);
         }
         $m->addElement('static', 'line', get_string('reverseline', $p), $this->_customdata['text']);
-        $m->addElement('static', 'reverseinfo', '', get_string('reverseinfo', $p));
+        $m->addElement('static', 'reverseinfo', '', $this->_customdata['info'] ?? get_string('reverseinfo', $p));
         $m->addElement('textarea', 'reason', get_string('reasonnote', $p), ['rows' => 2, 'cols' => 60]);
         $m->setType('reason', PARAM_TEXT);
         $m->addRule('reason', null, 'required', null, 'client');

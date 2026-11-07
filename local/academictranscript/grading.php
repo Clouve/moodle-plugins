@@ -49,6 +49,9 @@ if (data_submitted() && confirm_sesskey()) {
 echo $OUTPUT->header();
 echo $OUTPUT->heading(get_string('gradingscale_title', $p));
 echo html_writer::tag('p', get_string('gradingintro', $p));
+if (\local_academictranscript\local\srsource::enabled()) {
+    echo $OUTPUT->notification(get_string('scale_usesstudentrecords', $p), 'info');
+}
 foreach ($errors as $error) {
     echo $OUTPUT->notification(s($error), 'error');
 }

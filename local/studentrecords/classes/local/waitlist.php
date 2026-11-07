@@ -188,9 +188,11 @@ class waitlist {
      * @return int students offered a seat
      */
     protected static function offer_seats(int $offerid): int {
+        global $DB;
         $offer = registration::offer($offerid);
         if (
             !selfreg::enabled() || $offer->status !== 'open' ||
+                !$DB->get_field('local_studentrecords_term', 'active', ['id' => $offer->termid]) ||
                 registration::window_problem('add', catalog::time_to_date(time()), registration::term_days((int)$offer->termid))
         ) {
             return 0;
@@ -206,7 +208,7 @@ class waitlist {
                 continue;
             }
             $student = students::get((int)$w->studentid);
-            if (!selfreg::status_allows($student) || academic::blocking_holds((int)$student->id)) {
+            if (!selfreg::status_allows($student) || selfreg::problems($student, $offer)) {
                 continue;
             }
             records::save(
@@ -223,24 +225,37 @@ class waitlist {
     }
 
     /**
-     * Daily: seat offers not taken in time lapse (the student stays off the list) and go to the next student.
+     * Daily: seat offers not taken in time lapse (the student stays off the list). Then every section with someone waiting
+     * offers its free seats, not only the sections where an offer just lapsed, so a run that stopped after ending an offer
+     * loses nothing: the next run makes the offer. Running it again changes nothing, because a seat held for a student is
+     * not free. A section that fails doesn't stop the others. The task still ends with the error, so Moodle runs it again.
      *
      * @return int offers lapsed
+     * @throws \moodle_exception the first error of a section, after every section was tried
      */
     public static function daily(): int {
         global $DB;
         $n = 0;
-        $offers = [];
         foreach ($DB->get_records(self::TABLE, ['kind' => 'section', 'status' => 'offered']) as $w) {
             if (!self::offer_held((int)$w->timeoffered, time())) {
                 records::save(self::TABLE, ['id' => $w->id, 'status' => 'left', 'timeended' => time(),
                     'note' => get_string('wait_lapsed', 'local_studentrecords')], 'task', null);
-                $offers[(int)$w->offerid] = true;
                 $n++;
             }
         }
-        foreach (array_keys($offers) as $offerid) {
-            self::seat_opened($offerid);
+        $error = null;
+        $offerids = $DB->get_fieldset_sql("SELECT DISTINCT offerid FROM {" . self::TABLE . "}
+                                            WHERE kind = 'section' AND status = 'waiting'
+                                         ORDER BY offerid");
+        foreach ($offerids as $offerid) {
+            try {
+                self::seat_opened((int)$offerid);
+            } catch (\moodle_exception $e) {
+                $error = $error ?? $e;
+            }
+        }
+        if ($error) {
+            throw $error;
         }
         return $n;
     }

@@ -23,18 +23,25 @@ For anyone who checks a transcript:
 
 With Student Records 1.4.6 or later:
 
-- The new setting "Source of the transcript" reads the student's details, terms, courses, grades, withdrawals, courses in progress, transfer credit and the conferred award from Student Records. GPAs, repeats and hours earned stay with this plugin.
+- The new setting "Source of the transcript" reads the student's details, terms, courses, grades, withdrawals, courses in progress, transfer credit and the conferred award from Student Records. GPAs, repeats and hours earned are worked out here, on the grading scale in Student Records, so the transcript and the record show the same figures. The transcript key prints that scale.
 - "Post final grades" also saves the grade on the student's registration, on the school's grading scale there. The grade freeze and a grade set by the Registrar both block it.
+- A grade below a program's minimum passing grade earns no hours on the transcript and says why. Transfer credit marked "in GPA" prints its letter and quality points and counts in the overall GPA.
+- Teachers see the marks of Student Records for a student with a file there. A saved mark that the scale no longer has is an error, and the course total never replaces it.
 - "Request change" sends a grade change request to the Registrar in Student Records. It offers the school's marks (I, P, NP, W, NC and others).
 - The post page shows the current Student Records grade when it differs from the posted one.
 - The fee of a request goes on the student's account when billing is on. A hold puts a request on hold, and a request can wait for grades or the degree.
 
 Other changes:
 
-- A grade from Student Records that isn't on this plugin's scale or marks is listed as a problem and stops Official transcripts, because it would print with no points and no hours.
-- A hold stops every way of issuing an Official transcript, and a double click on Issue doesn't make a second transcript.
+- A grade that isn't on the grading scale in Student Records is listed as a problem and stops Official transcripts, because it would print with no points.
+- The bundled fonts are now named Clouve Sans and Clouve Serif, because the Open Font License reserves the old name for the original fonts. Transcripts look the same, and only the font names in a PDF's properties change. Sites have nothing to do.
+- Hours and grade points print with two decimals when they have them, so 5.25 no longer prints as 5.3.
+- A hold stops every way of issuing an Official transcript.
+- A double click can't charge or issue twice: on the request form, Issue, Reissue and the issue form on a student's page. Cancel and Issue can't both happen to one request.
+- A posted grade and a grade the Registrar saves at the same moment run one after the other, so the change history is right.
+- Staff keep their tools on their own page, with a My transcript tab beside them. Nobody can issue their own Official transcript, approve a change to their own grade, or post their own final grade.
 - A change request goes to the registration that got the grade, so it reaches the right attempt of a course that ran twice. Each posted grade now keeps a link to its registration.
-- Posting stops, with a message, when a course runs again and the student has no new registration. It never replaces a finished attempt.
+- Posting stops, with a message, when a course runs again and the student has no new registration. It never replaces a grade a teacher posted or the Registrar set.
 - A grade posted here that isn't in Student Records is listed as a problem and stops Official transcripts, so it can't drop off without a word.
 - One failed posting no longer affects the other students in the batch.
 - Transcript requests has Cancel request on pending, waiting and on-hold rows. A reason is optional and goes in the activity log, and the fee stays on the account. An issued request can't be cancelled.

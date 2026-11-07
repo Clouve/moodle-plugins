@@ -228,6 +228,41 @@ final class pages_test extends \advanced_testcase {
     }
 
     /**
+     * What follows the search box in the top bar is the same as in Boost. Moodle 5.3 took the divider away there, so it
+     * goes on 5.3 and later, and earlier versions keep it.
+     */
+    public function test_top_bar_divider_after_the_search_box_follows_boost(): void {
+        global $CFG;
+
+        set_config('enableglobalsearch', 1);
+        $this->setUser($this->getDataGenerator()->create_user());
+
+        $classes = explode(' ', $this->element_after_search_box($this->render_page('standard'))->getAttribute('class'));
+
+        if ($CFG->branch >= 503) {
+            $this->assertNotContains('divider', $classes);
+        } else {
+            $this->assertContains('divider', $classes);
+        }
+    }
+
+    /**
+     * Find the element right after the search box in the top bar.
+     *
+     * @param string $html The page
+     * @return \DOMElement
+     */
+    private function element_after_search_box(string $html): \DOMElement {
+        $dom = new \DOMDocument();
+        $dom->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING);
+
+        $next = (new \DOMXPath($dom))->query('//*[@id="usernavigation"]/*[contains(@class, "search")]/following-sibling::*[1]');
+
+        $this->assertSame(1, $next->length);
+        return $next->item(0);
+    }
+
+    /**
      * During an upgrade Moodle shows the maintenance layout, which asks nothing of the database or of Student Records.
      */
     public function test_maintenance_layout_renders_during_an_upgrade(): void {

@@ -15,6 +15,17 @@ namespace local_studentrecords\local;
  */
 class access {
     /**
+     * Whether a student record is the current user's own. Staff don't set their own grade or decide their own graduation.
+     *
+     * @param \stdClass $student record
+     * @return bool
+     */
+    public static function is_own(\stdClass $student): bool {
+        global $USER;
+        return (int)$student->userid === (int)$USER->id;
+    }
+
+    /**
      * Whether the current user may see all students.
      *
      * @return bool

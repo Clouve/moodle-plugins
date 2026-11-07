@@ -21,16 +21,15 @@ class document extends \pdf {
     public $accent = [31, 58, 95];
 
     /**
-     * Register the bundled fonts (Source Sans 3, Source Serif 4; SIL Open Font License).
+     * Register the bundled fonts (Clouve Sans, Clouve Serif; SIL Open Font License).
      */
     public function add_fonts(): void {
         $dir = \core_component::get_component_directory('local_academictranscript') . '/fonts/';
         // Every style is registered (nearest available file) so inherited bold/italic never fails.
         $families = [
-            'sourcesans3' => ['' => 'sourcesans3', 'B' => 'sourcesans3b', 'I' => 'sourcesans3i', 'BI' => 'sourcesans3b'],
-            'sourcesans3semib' => ['' => 'sourcesans3semib', 'B' => 'sourcesans3b', 'I' => 'sourcesans3i',
-                'BI' => 'sourcesans3b'],
-            'sourceserif4' => ['' => 'sourceserif4', 'B' => 'sourceserif4b', 'I' => 'sourceserif4i', 'BI' => 'sourceserif4b'],
+            'clouvesans' => ['' => 'clouvesans', 'B' => 'clouvesansb', 'I' => 'clouvesansi', 'BI' => 'clouvesansb'],
+            'clouvesanssemib' => ['' => 'clouvesanssemib', 'B' => 'clouvesansb', 'I' => 'clouvesansi', 'BI' => 'clouvesansb'],
+            'clouveserif' => ['' => 'clouveserif', 'B' => 'clouveserifb', 'I' => 'clouveserifi', 'BI' => 'clouveserifb'],
         ];
         foreach ($families as $family => $styles) {
             foreach ($styles as $style => $file) {
@@ -53,7 +52,7 @@ class document extends \pdf {
             $this->SetAlpha(0.14);
             $this->StartTransform();
             $this->Rotate(32, $w / 2, $h / 2);
-            $this->SetFont('sourcesans3', 'B', 46);
+            $this->SetFont('clouvesans', 'B', 46);
             $this->SetTextColor(176, 32, 32);
             $this->SetXY(0, $h / 2 - 10);
             $this->Cell($w, 20, $this->watermark, 0, 0, 'C');

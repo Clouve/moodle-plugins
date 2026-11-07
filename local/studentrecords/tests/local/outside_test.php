@@ -105,6 +105,16 @@ final class outside_test extends \advanced_testcase {
     }
 
     /**
+     * The only part of the Counts tab without race, ethnicity or sex is the list of completions by program.
+     */
+    public function test_counts_show_demographics(): void {
+        $this->assertTrue(outside::counts_show_demographics('headcount', ''));
+        $this->assertTrue(outside::counts_show_demographics('headcount', 'programs'));
+        $this->assertTrue(outside::counts_show_demographics('completions', ''));
+        $this->assertFalse(outside::counts_show_demographics('completions', 'programs'));
+    }
+
+    /**
      * The starter exports are added once.
      */
     public function test_add_starters(): void {

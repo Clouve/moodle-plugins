@@ -22,7 +22,11 @@ $changeid = optional_param('changeid', 0, PARAM_INT);
 $decision = optional_param('decision', '', PARAM_ALPHA);
 if ($changeid && in_array($decision, ['approve', 'reject'])) {
     require_sesskey();
-    posting::decide($changeid, $decision === 'approve', optional_param('decisionnote', '', PARAM_TEXT));
+    try {
+        posting::decide($changeid, $decision === 'approve', optional_param('decisionnote', '', PARAM_TEXT));
+    } catch (moodle_exception $e) {
+        redirect($url, s($e->getMessage()), null, \core\output\notification::NOTIFY_ERROR);
+    }
     redirect(
         $url,
         get_string($decision === 'approve' ? 'changeapproved' : 'changerejected', 'local_academictranscript'),
@@ -48,7 +52,9 @@ if (!$pending) {
         get_string('term', 'local_academictranscript'), get_string('change', 'local_academictranscript'),
         get_string('reason', 'local_academictranscript'), get_string('requestedby', 'local_academictranscript'), ''];
     foreach ($pending as $c) {
-        $form = html_writer::start_tag('form', ['method' => 'post', 'action' => $url->out(false), 'class' => 'd-flex gap-1'])
+        $problem = posting::decide_problem($c, (int)$c->userid);
+        $form = $problem !== '' ? html_writer::span(get_string($problem, 'local_academictranscript'), 'text-muted small') :
+            html_writer::start_tag('form', ['method' => 'post', 'action' => $url->out(false), 'class' => 'd-flex gap-1'])
             . html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()])
             . html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'changeid', 'value' => $c->id])
             . html_writer::empty_tag('input', ['type' => 'text', 'name' => 'decisionnote', 'size' => 18, 'maxlength' => 255,

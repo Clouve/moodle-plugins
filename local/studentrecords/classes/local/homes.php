@@ -141,7 +141,7 @@ class homes {
                 has_capability('local/academictranscript:viewown', \context_system::instance())
         ) {
             $buttons[] = html_writer::link(
-                new \moodle_url('/local/academictranscript/index.php'),
+                new \moodle_url('/local/academictranscript/index.php', ['view' => 'mine']),
                 get_string('nav_mytranscript', $p),
                 ['class' => 'btn btn-outline-secondary']
             );
@@ -658,8 +658,24 @@ class homes {
     }
 
     /**
+     * A percent as short as it can be while it still shows under a limit: 65.4 shows as 65, and 99.6 under 100 as 99.6, not as
+     * the 100 it is under.
+     *
+     * @param float $percent under the limit
+     * @param float $limit
+     * @return string
+     */
+    protected static function percent_under(float $percent, float $limit): string {
+        $decimals = 0;
+        while ($decimals < 5 && (float)format_float($percent, $decimals, false) >= $limit) {
+            $decimals++;
+        }
+        return format_float($percent, $decimals);
+    }
+
+    /**
      * Students at risk in the teacher's classes: attendance under or near the minimum, or a Moodle course grade under
-     * the passing percent (when the course has one).
+     * the school's at-risk percent (when the course has one).
      *
      * @return string HTML
      */
@@ -667,6 +683,7 @@ class homes {
         global $DB;
         $p = self::P;
         $minimum = (float)(catalog::setting('minattendance') !== '' ? catalog::setting('minattendance') : 80);
+        $lowest = catalog::atrisk_percent();
         $rows = [];
         foreach (array_keys(shell::my_offerings()) as $id) {
             $o = registration::offer((int)$id);
@@ -678,7 +695,7 @@ class homes {
                     (int)$o->moodlecourseid,
                     (int)$student->userid
                 ) : null;
-                $lowgrade = $pct !== null && $pct < 70;
+                $lowgrade = $pct !== null && $pct < $lowest;
                 if ($tone === '' && !$lowgrade) {
                     continue;
                 }
@@ -691,7 +708,7 @@ class homes {
                     ), $tone);
                 }
                 if ($lowgrade) {
-                    $why[] = shell::tag(get_string('risk_grade', $p, format_float($pct, 0) . '%'), 'warn');
+                    $why[] = shell::tag(get_string('risk_grade', $p, self::percent_under($pct, $lowest) . '%'), 'warn');
                 }
                 $name = students::display_name($student, access::hide_directory($student));
                 $rows[] = [s($name), s($o->code . ' ' . $o->section), implode(' ', $why),
@@ -706,7 +723,9 @@ class homes {
         $table->head = [get_string('home_student', $p), get_string('home_class', $p), get_string('risk_why', $p),
             get_string('lastattended', $p)];
         $table->data = $rows;
-        return html_writer::tag('p', get_string('risk_intro', $p, format_float($minimum, 0)), ['class' => 'sr-muted']) .
+        $intro = $lowest > 0 ? get_string('risk_intro', $p, (object)['attendance' => format_float($minimum, 0),
+            'grade' => format_float($lowest, -1)]) : get_string('risk_intro_attendance', $p, format_float($minimum, 0));
+        return html_writer::tag('p', $intro, ['class' => 'sr-muted']) .
             html_writer::div(html_writer::table($table), 'table-responsive');
     }
 }

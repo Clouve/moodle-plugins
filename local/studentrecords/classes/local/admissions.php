@@ -81,7 +81,8 @@ class admissions {
     }
 
     /**
-     * The next automatic student ID (the year is this year in the school's time zone).
+     * The next automatic student ID (the year is this year in the school's time zone). To give it to a new student, leave the
+     * ID blank in students::save(), which works it out under a lock.
      *
      * @return string
      */
@@ -172,6 +173,9 @@ class admissions {
         $s = students::get($studentid);
         if ($s->status === $status) {
             return;
+        }
+        if (access::is_own($s)) {
+            throw new \moodle_exception('err_ownrecord', 'local_studentrecords');
         }
         records::save(students::TABLE, ['id' => $studentid, 'status' => $status], 'form', (int)$s->userid);
         self::add_status_history($studentid, $s->status, $status, $effective, $note);
@@ -336,6 +340,9 @@ class admissions {
      */
     public static function record_decision(\stdClass $student, array $data): int {
         global $DB, $USER;
+        if (access::is_own($student)) {
+            throw new \moodle_exception('err_ownrecord', 'local_studentrecords');
+        }
         $transaction = $DB->start_delegated_transaction();
         $id = (int)$DB->insert_record('local_studentrecords_admdec', (object)['studentid' => $student->id,
             'decision' => $data['decision'], 'decisiondate' => (int)$data['decisiondate'],
@@ -373,7 +380,7 @@ class admissions {
         if ($data['decision'] === 'admitted') {
             messages::student('welcome', $student);
         }
-        $transaction->allow_commit();
+        records::commit($transaction, $student);
         return $id;
     }
 

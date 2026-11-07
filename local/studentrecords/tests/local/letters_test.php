@@ -52,6 +52,27 @@ final class letters_test extends \advanced_testcase {
     }
 
     /**
+     * Working out the number and saving the letter happen under one lock, so two letters issued at once can't get the same
+     * number. The lock is taken before anything is read, and it is released once the letter is saved for good.
+     */
+    public function test_issue_numbers_one_letter_at_a_time(): void {
+        global $CFG, $DB;
+        require_once(__DIR__ . '/../fixtures/recording_lock_factory.php');
+        $this->preventResetByRollback();
+        $sr = $this->getDataGenerator()->get_plugin_generator('local_studentrecords');
+        $user = $this->getDataGenerator()->create_user();
+        $student = $sr->create_student(['userid' => $user->id, 'studentid' => 'S1']);
+        $CFG->lock_factory = recording_lock_factory::class;
+        recording_lock_factory::$notes = [];
+        recording_lock_factory::$state = fn() => [$DB->count_records(letters::TABLE), $DB->is_transaction_started()];
+
+        letters::issue($student, 'Riverside Bank');
+
+        $expected = [['taken', 'letterno', [0, false]], ['released', 'letterno', [1, false]]];
+        $this->assertSame($expected, recording_lock_factory::$notes);
+    }
+
+    /**
      * An issued letter keeps its facts, and each letter gets its own number.
      */
     public function test_issue(): void {

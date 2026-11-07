@@ -10,6 +10,7 @@
 
 require_once(__DIR__ . '/../../config.php');
 
+use local_studentrecords\local\access;
 use local_studentrecords\local\registration;
 use local_studentrecords\local\staffarea;
 use local_studentrecords\local\students;
@@ -26,6 +27,9 @@ require_capability('local/studentrecords:managestudents', context_system::instan
 $student = students::get($id);
 $url = new moodle_url('/local/studentrecords/register.php', array_filter(['id' => $id, 'action' => $action, 'reg' => $regid]));
 $back = new moodle_url('/local/studentrecords/student.php', ['id' => $id]);
+if ($action === 'grade' && access::is_own($student)) {
+    throw new moodle_exception('err_gradeown', $p, $back->out(false));
+}
 staffarea::start_page($url, 'students');
 $PAGE->navbar->add(get_string('studentrecords', $p), new moodle_url('/local/studentrecords/students.php'));
 $PAGE->navbar->add(students::display_name($student), $back);

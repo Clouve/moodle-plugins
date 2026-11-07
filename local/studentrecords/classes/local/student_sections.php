@@ -165,7 +165,10 @@ class student_sections {
                     $actions[] = $link('drop', $r->id, 'action_drop');
                     $actions[] = $link('withdraw', $r->id, 'action_withdraw');
                 }
-                if ($manage && in_array($r->status, ['registered', 'completed'], true) && !registration::frozen((int)$r->offerid)) {
+                if (
+                    $manage && in_array($r->status, ['registered', 'completed'], true) &&
+                        !registration::frozen((int)$r->offerid) && !access::is_own($student)
+                ) {
                     $actions[] = $link('grade', $r->id, 'action_grade');
                 }
                 if ($manage && $r->status === 'completed') {
@@ -225,6 +228,7 @@ class student_sections {
         global $DB, $OUTPUT;
         $p = self::P;
         $out = '';
+        $manage = $manage && !access::is_own($student);
         if ($history['transfers']) {
             $courses = $DB->get_records_menu('local_studentrecords_course', null, '', 'id, code');
             $table = new html_table();
@@ -537,7 +541,7 @@ class student_sections {
         } else {
             $out .= html_writer::tag('p', get_string('none'));
         }
-        return $out . ($manage ? self::edit_link($student, 'decision', 'recorddecision') : '');
+        return $out . ($manage && !access::is_own($student) ? self::edit_link($student, 'decision', 'recorddecision') : '');
     }
 
     /**

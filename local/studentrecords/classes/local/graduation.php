@@ -89,6 +89,17 @@ class graduation {
     }
 
     /**
+     * Stop a person deciding their own application, whatever their role.
+     *
+     * @param \stdClass $student
+     */
+    public static function require_not_own(\stdClass $student): void {
+        if (access::is_own($student)) {
+            throw new \moodle_exception('err_gradownapp', 'local_studentrecords');
+        }
+    }
+
+    /**
      * Review: the degree audit is run and kept with the application; approve or deny.
      *
      * @param int $appid
@@ -104,6 +115,7 @@ class graduation {
             throw new \moodle_exception('err_gradappstate', 'local_studentrecords');
         }
         $student = students::get((int)$app->studentid);
+        self::require_not_own($student);
         $audit = degreeaudit::run($student);
         // Conditional approval: complete once the classes in progress are passed.
         $conditional = $approve && $audit && !$audit['complete'] && !empty($audit['completeifpassed']);
@@ -140,6 +152,7 @@ class graduation {
             throw new \moodle_exception('err_gradappstate', 'local_studentrecords');
         }
         $student = students::get((int)$app->studentid);
+        self::require_not_own($student);
         if (!empty($app->conditional)) {
             // A conditional approval becomes final only when the audit is complete (grades posted and passed).
             $audit = degreeaudit::run($student);
@@ -166,11 +179,11 @@ class graduation {
             admissions::set_status((int)$student->id, 'graduated', $date, get_string('conferralnote', 'local_studentrecords'));
             audit::log('update', 'student', (int)$student->id, (int)$student->userid, 'conferred ' . $award);
             messages::student('conferred', $student);
-            $transaction->allow_commit();
         } catch (\Throwable $e) {
             // The page shows the error and carries on, so the transaction must end here.
             $transaction->rollback($e);
         }
+        records::commit($transaction, $student);
     }
 
     /**

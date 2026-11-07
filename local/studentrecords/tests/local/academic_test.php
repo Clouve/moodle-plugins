@@ -221,6 +221,32 @@ final class academic_test extends \advanced_testcase {
     }
 
     /**
+     * Someone may decide a request that waits, with the approve capability, unless they asked for it or it is their own grade.
+     */
+    public function test_who_can_decide(): void {
+        global $DB;
+        $c = $this->graded_course();
+        $this->setUser($c['registrar']);
+        $id = academic::request_change($c['regid'], 'A', null, 'Reason');
+        $change = academic::changes()[$id];
+        $this->assertFalse(academic::can_decide($change), 'The person who asked decided.');
+
+        $this->setUser($c['dean']);
+        $this->assertTrue(academic::can_decide($change));
+
+        $this->setUser($this->getDataGenerator()->create_user());
+        $this->assertFalse(academic::can_decide($change), 'Someone without the capability decided.');
+
+        role_assign((int)$DB->get_field('role', 'id', ['shortname' => 'manager']), $c['user']->id, \context_system::instance()->id);
+        $this->setUser($c['user']);
+        $this->assertFalse(academic::can_decide($change), 'The student decided on their own grade.');
+
+        $this->setUser($c['dean']);
+        academic::decide_change($id, false, 'No');
+        $this->assertFalse(academic::can_decide(academic::changes('')[$id]), 'A decided request was decided again.');
+    }
+
+    /**
      * The list of requests joins course, term and student on every database.
      */
     public function test_changes_list(): void {

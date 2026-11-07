@@ -88,6 +88,17 @@ class scale {
         foreach (self::marks() as $m) {
             $marks[] = ['code' => $m->code, 'earns' => $m->earns];
         }
+        return self::calculator_for($grades, $marks);
+    }
+
+    /**
+     * Calculator with this plugin's settings for a list of grades and marks.
+     *
+     * @param array $grades see the constructor of calculator
+     * @param array $marks see the constructor of calculator
+     * @return calculator
+     */
+    public static function calculator_for(array $grades, array $marks): calculator {
         $rule = (string)get_config('local_academictranscript', 'repeatrule');
         return new calculator(
             $grades,
@@ -152,11 +163,31 @@ class scale {
         if (trim((string)$g->percentlabel) !== '') {
             return $g->percentlabel;
         }
-        $fmt = fn($n) => rtrim(rtrim(number_format((float)$n, 2, '.', ''), '0'), '.');
         if ((float)$g->minpct <= 0) {
-            return get_string('belowpercent', 'local_academictranscript', $fmt((float)$g->maxpct + 1));
+            return get_string('belowpercent', 'local_academictranscript', self::percent_text((float)$g->maxpct + 1));
         }
-        return $fmt($g->minpct) . '-' . $fmt($g->maxpct) . '%';
+        return self::percent_text((float)$g->minpct) . '-' . self::percent_text((float)$g->maxpct) . '%';
+    }
+
+    /**
+     * Hours or grade points for print: one decimal, or two when the value has them, so nothing is rounded away.
+     *
+     * @param float $value
+     * @return string
+     */
+    public static function number(float $value): string {
+        $text = number_format($value, 2);
+        return substr($text, -1) === '0' ? substr($text, 0, -1) : $text;
+    }
+
+    /**
+     * A percentage with no trailing zeros.
+     *
+     * @param float $percent
+     * @return string
+     */
+    public static function percent_text(float $percent): string {
+        return rtrim(rtrim(number_format($percent, 2, '.', ''), '0'), '.');
     }
 
     /**
@@ -167,9 +198,24 @@ class scale {
      * @return array list of ['grade', 'points', 'percent', 'description', 'rowspan', 'ismark']
      */
     public static function scale_rows(): array {
+        $grades = [];
+        foreach (self::grades() as $g) {
+            $grades[] = (object)['letter' => $g->letter, 'points' => $g->points, 'percent' => self::percent_label($g),
+                'description' => $g->description, 'ingpa' => $g->ingpa];
+        }
+        return self::key_rows($grades, self::marks());
+    }
+
+    /**
+     * Rows of the transcript key from a list of grades and marks.
+     *
+     * @param \stdClass[] $grades letter, points, percent (text), description, ingpa, best first
+     * @param \stdClass[] $marks code, label, description
+     * @return array see scale_rows()
+     */
+    public static function key_rows(array $grades, array $marks): array {
         $context = \context_system::instance();
         $rows = [];
-        $grades = array_values(self::grades());
         $n = count($grades);
         for ($i = 0; $i < $n; $i++) {
             $g = $grades[$i];
@@ -181,11 +227,11 @@ class scale {
                     $span++;
                 }
             }
-            $rows[] = ['grade' => $g->letter, 'points' => number_format((float)$g->points, 1),
-                'percent' => self::percent_label($g), 'description' => $first ? text::plain($desc, $context) : null,
+            $rows[] = ['grade' => $g->letter, 'points' => self::number((float)$g->points),
+                'percent' => $g->percent, 'description' => $first ? text::plain($desc, $context) : null,
                 'rowspan' => $span, 'ismark' => false, 'ingpa' => (bool)$g->ingpa];
         }
-        foreach (self::marks() as $m) {
+        foreach ($marks as $m) {
             $rows[] = ['grade' => $m->code, 'points' => get_string('notingpa', 'local_academictranscript'),
                 'percent' => '', 'description' => text::plain((string)($m->description ?: $m->label), $context), 'rowspan' => 1,
                 'ismark' => true, 'ingpa' => false];

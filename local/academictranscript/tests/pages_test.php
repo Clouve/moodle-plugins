@@ -37,6 +37,9 @@ final class pages_test extends \advanced_testcase {
     protected function tearDown(): void {
         global $ADMIN;
         $ADMIN = null;
+        if (class_exists('\\local_studentrecords\\local\\shell')) {
+            \local_studentrecords\local\shell::reset();
+        }
         parent::tearDown();
     }
 
@@ -141,6 +144,42 @@ final class pages_test extends \advanced_testcase {
     }
 
     /**
+     * A double click on the request form makes one request.
+     */
+    public function test_request_form_saves_a_double_click_once(): void {
+        global $DB;
+        $student = $this->getDataGenerator()->create_user();
+        $this->setUser($student);
+
+        $_POST = ['action' => 'request', 'delivery' => 'pickup', 'recipient' => 'Myself', 'timing' => 'now',
+            'sesskey' => sesskey()];
+        $this->failure(fn() => $this->run_page('index.php'));
+        $this->failure(fn() => $this->run_page('index.php'));
+
+        $this->assertSame(1, $DB->count_records(requests::TABLE, ['userid' => $student->id]));
+    }
+
+    /**
+     * The second click of a double click doesn't say a new request went out. It says the request was sent once.
+     */
+    public function test_request_form_tells_a_double_click_it_was_sent_once(): void {
+        $student = $this->getDataGenerator()->create_user();
+        $this->setUser($student);
+
+        $_POST = ['action' => 'request', 'delivery' => 'pickup', 'recipient' => 'Myself', 'timing' => 'now',
+            'sesskey' => sesskey()];
+        $this->failure(fn() => $this->run_page('index.php'));
+        $this->assertSame([], \core\notification::fetch());
+
+        $this->failure(fn() => $this->run_page('index.php'));
+
+        $notices = \core\notification::fetch();
+        $this->assertCount(1, $notices);
+        $this->assertSame(get_string('req_saved_repeat', 'local_academictranscript'), $notices[0]->get_message());
+        $this->assertSame(\core\output\notification::NOTIFY_INFO, $notices[0]->get_message_type());
+    }
+
+    /**
      * A student who posts the form with another student's id makes no request for that student.
      */
     public function test_a_student_cannot_request_for_another_student(): void {
@@ -187,6 +226,138 @@ final class pages_test extends \advanced_testcase {
     }
 
     /**
+     * A second click on Issue on the queue makes no second transcript, and Reissue still makes a new copy.
+     */
+    public function test_queue_issues_once_and_reissue_stays_separate(): void {
+        global $DB;
+        $student = $this->getDataGenerator()->create_user();
+        $this->setUser($student);
+        $requestid = requests::create($student->id, ['delivery' => 'pickup', 'recipient' => 'Myself', 'timing' => 'now']);
+        $this->setAdminUser();
+
+        $_POST = ['do' => 'issue', 'request' => $requestid, 'sesskey' => sesskey()];
+        $this->failure(fn() => $this->run_page('requests.php'));
+        $this->failure(fn() => $this->run_page('requests.php'));
+        $this->assertSame(1, $DB->count_records('local_academictranscript_issue', ['userid' => $student->id]));
+
+        $DB->set_field(requests::TABLE, 'timeissued', time() - requests::REPEATWINDOW - 1, ['id' => $requestid]);
+        $_POST['do'] = 'reissue';
+        $this->failure(fn() => $this->run_page('requests.php'));
+        $this->failure(fn() => $this->run_page('requests.php'));
+        $this->assertSame(2, $DB->count_records('local_academictranscript_issue', ['userid' => $student->id]));
+    }
+
+    /**
+     * Cancel and Issue on the same request: whichever comes second changes nothing.
+     *
+     * @dataProvider second_action_provider
+     * @param string $first The action that gets there first
+     * @param string $second The action that comes second
+     * @param string $status The status of the request afterwards
+     * @param int $issues How many transcripts there are afterwards
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('second_action_provider')]
+    public function test_queue_changes_nothing_on_the_second_of_cancel_and_issue(
+        string $first,
+        string $second,
+        string $status,
+        int $issues
+    ): void {
+        global $DB;
+        $student = $this->getDataGenerator()->create_user();
+        $this->setUser($student);
+        $requestid = requests::create($student->id, ['delivery' => 'pickup', 'recipient' => 'Myself', 'timing' => 'now']);
+        $this->setAdminUser();
+
+        foreach ([$first, $second] as $do) {
+            $_POST = ['do' => $do, 'request' => $requestid, 'sesskey' => sesskey()];
+            $this->failure(fn() => $this->run_page('requests.php'));
+        }
+
+        $this->assertSame($status, $DB->get_field(requests::TABLE, 'status', ['id' => $requestid]));
+        $this->assertSame($issues, $DB->count_records('local_academictranscript_issue', ['userid' => $student->id]));
+    }
+
+    /**
+     * Data for test_queue_changes_nothing_on_the_second_of_cancel_and_issue.
+     *
+     * @return array
+     */
+    public static function second_action_provider(): array {
+        return [
+            'issue first' => ['issue', 'cancel', 'issued', 1],
+            'cancel first' => ['cancel', 'issue', 'cancelled', 0],
+        ];
+    }
+
+    /**
+     * A double click on the issue form of a student's page makes one Official transcript, and another recipient makes
+     * another.
+     */
+    public function test_issue_form_makes_one_copy_for_a_double_click(): void {
+        global $DB;
+        $student = $this->getDataGenerator()->create_user();
+        $this->make_manager();
+
+        $_GET['userid'] = $student->id;
+        $_POST = ['action' => 'issue', 'recipient' => 'Valley College', 'sesskey' => sesskey()];
+        $this->failure(fn() => $this->run_page('index.php'));
+        $this->assertSame([], \core\notification::fetch());
+        $this->failure(fn() => $this->run_page('index.php'));
+        $this->assertSame(1, $DB->count_records('local_academictranscript_issue', ['userid' => $student->id]));
+        $notices = \core\notification::fetch();
+        $this->assertCount(1, $notices);
+        $this->assertStringContainsString('so no new copy was made', $notices[0]->get_message());
+        $this->assertSame(\core\output\notification::NOTIFY_INFO, $notices[0]->get_message_type());
+
+        $_POST['recipient'] = 'Hill College';
+        $this->failure(fn() => $this->run_page('index.php'));
+        $this->assertSame(2, $DB->count_records('local_academictranscript_issue', ['userid' => $student->id]));
+    }
+
+    /**
+     * My Transcript stays the marked item of the Student Records menu on My transcript, for a student and for staff with a
+     * student file, and it isn't marked on the staff view.
+     *
+     * @dataProvider menu_mark_provider
+     * @param bool $staff Whether the user is staff
+     * @param array $get What the address says
+     * @param bool $marked Whether My Transcript is marked
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('menu_mark_provider')]
+    public function test_my_transcript_is_marked_in_the_menu(bool $staff, array $get, bool $marked): void {
+        if (!class_exists('\\local_studentrecords\\local\\shell')) {
+            $this->markTestSkipped('Student Records is not installed.');
+        }
+        $user = $staff ? $this->make_manager() : $this->getDataGenerator()->create_user();
+        $this->setAdminUser();
+        $this->getDataGenerator()->get_plugin_generator('local_studentrecords')->create_student(['userid' => $user->id,
+            'studentid' => 'S-1']);
+        $this->setUser($user);
+        \local_studentrecords\local\shell::reset();
+        $_GET = isset($get['self']) ? ['userid' => $user->id] : $get;
+
+        $html = $this->run_page('index.php');
+
+        $label = preg_quote(get_string('nav_mytranscript', 'local_studentrecords'), '/');
+        $this->assertSame($marked ? 1 : 0, preg_match('/aria-current="page"[^>]*>' . $label . '<\/a>/', $html));
+    }
+
+    /**
+     * Data for test_my_transcript_is_marked_in_the_menu.
+     *
+     * @return array
+     */
+    public static function menu_mark_provider(): array {
+        return [
+            'a student from the menu' => [false, ['view' => 'mine'], true],
+            'a student from the profile' => [false, ['self' => 1], true],
+            'a student with nothing in the address' => [false, [], true],
+            'staff from the menu' => [true, ['view' => 'mine'], true],
+        ];
+    }
+
+    /**
      * Staff who open a student's page never make a request for that student by posting the form.
      */
     public function test_staff_cannot_request_for_a_student(): void {
@@ -201,6 +372,293 @@ final class pages_test extends \advanced_testcase {
         $this->run_page('index.php');
 
         $this->assertSame(0, $DB->count_records(requests::TABLE));
+    }
+
+    /**
+     * With Student Records as the source, the scale pages say which students they cover, and without it they don't.
+     */
+    public function test_the_scale_pages_say_which_students_they_cover(): void {
+        set_config('setupcomplete', 1, 'local_academictranscript');
+        $this->setAdminUser();
+        $notice = get_string('scale_usesstudentrecords', 'local_academictranscript');
+        $this->assertStringNotContainsString($notice, $this->run_page('grading.php'));
+        if (!class_exists('\\local_studentrecords\\local\\registration')) {
+            $this->markTestSkipped('Student Records is not installed.');
+        }
+        set_config('source', 'studentrecords', 'local_academictranscript');
+
+        $this->assertStringContainsString($notice, $this->run_page('grading.php'));
+        $this->assertStringContainsString($notice, $this->run_page('marks.php'));
+    }
+
+    /**
+     * A staff member's own page has the same tools as any student's page, however it is opened: Edit student details, Transfer
+     * credit, Course terms and the issue form. The tabs say this is the staff view, and My transcript is beside it.
+     *
+     * @dataProvider own_address_provider
+     * @param bool $named Whether the address names the user
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('own_address_provider')]
+    public function test_staff_keep_their_tools_on_their_own_page(bool $named): void {
+        $manager = $this->make_manager();
+        if ($named) {
+            $_GET['userid'] = $manager->id;
+        }
+
+        $html = $this->run_page('index.php');
+
+        foreach (['editdetails', 'transfercredits', 'courseterms', 'issueofficial', 'view_staff'] as $key) {
+            $this->assertStringContainsString(get_string($key, 'local_academictranscript'), $html);
+        }
+        $this->assertStringContainsString(get_string('mytranscript_title', 'local_academictranscript'), $html);
+        $this->assertStringContainsString('view=mine', $html);
+        $this->assertStringNotContainsString(get_string('req_title', 'local_academictranscript'), $html);
+    }
+
+    /**
+     * Data for test_staff_keep_their_tools_on_their_own_page.
+     *
+     * @return array
+     */
+    public static function own_address_provider(): array {
+        return ['no user in the address' => [false], 'their own id in the address' => [true]];
+    }
+
+    /**
+     * The problems that stop an Official transcript are listed on a staff member's own page too.
+     */
+    public function test_staff_see_the_problems_on_their_own_page(): void {
+        $manager = $this->make_manager();
+        $course = $this->getDataGenerator()->create_course(['fullname' => 'Night Class']);
+        $this->getDataGenerator()->enrol_user($manager->id, $course->id, 'student');
+
+        $html = $this->run_page('index.php');
+
+        $this->assertStringContainsString(get_string('problemsheading', 'local_academictranscript'), $html);
+        $this->assertStringContainsString('Course "Night Class" has no hours.', $html);
+        $this->assertStringContainsString(get_string('issueown', 'local_academictranscript'), $html);
+    }
+
+    /**
+     * A staff member can still open My transcript and ask for an Official transcript there, as any student does. The tabs say
+     * which view this is, and the tools stay on the staff view.
+     */
+    public function test_staff_can_open_my_transcript(): void {
+        $this->make_manager();
+        $_GET['view'] = 'mine';
+
+        $html = $this->run_page('index.php');
+
+        $this->assertStringContainsString(get_string('req_title', 'local_academictranscript'), $html);
+        $this->assertStringContainsString(get_string('view_staff', 'local_academictranscript'), $html);
+        foreach (['editdetails', 'transfercredits', 'courseterms', 'issueofficial'] as $key) {
+            $this->assertStringNotContainsString(get_string($key, 'local_academictranscript'), $html);
+        }
+    }
+
+    /**
+     * The form on My transcript posts without any view in the address. A staff member's request is saved all the same.
+     */
+    public function test_staff_can_request_their_own_transcript(): void {
+        global $DB;
+        $manager = $this->make_manager();
+
+        $_POST = ['action' => 'request', 'delivery' => 'pickup', 'recipient' => 'Myself', 'timing' => 'now',
+            'sesskey' => sesskey()];
+        $this->failure(fn() => $this->run_page('index.php'));
+
+        $this->assertSame(1, $DB->count_records(requests::TABLE, ['userid' => $manager->id]));
+    }
+
+    /**
+     * A role that only manages student records has the three record buttons on its own page, and no issue form.
+     */
+    public function test_records_staff_have_the_record_tools_on_their_own_page(): void {
+        $user = $this->getDataGenerator()->create_user();
+        $role = create_role('Records clerk', 'recordsclerk', '');
+        assign_capability('local/academictranscript:managerecords', CAP_ALLOW, $role, SYSCONTEXTID);
+        role_assign($role, $user->id, SYSCONTEXTID);
+        set_config('setupcomplete', 1, 'local_academictranscript');
+        $this->setUser($user);
+
+        $html = $this->run_page('index.php');
+
+        foreach (['editdetails', 'transfercredits', 'courseterms', 'view_staff'] as $key) {
+            $this->assertStringContainsString(get_string($key, 'local_academictranscript'), $html);
+        }
+        $this->assertStringNotContainsString(get_string('issueofficial', 'local_academictranscript'), $html);
+    }
+
+    /**
+     * Someone without those permissions has My transcript and nothing else, whatever the address says: a student, and a
+     * teacher who can issue only for the students of a course.
+     *
+     * @dataProvider plain_user_provider
+     * @param string $role The role in a course, or '' for none
+     * @param array $get What the address says
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('plain_user_provider')]
+    public function test_my_transcript_is_all_a_user_without_tools_gets(string $role, array $get): void {
+        $user = $this->getDataGenerator()->create_user();
+        if ($role !== '') {
+            $this->getDataGenerator()->enrol_user($user->id, $this->getDataGenerator()->create_course()->id, $role);
+        }
+        $this->setUser($user);
+        $_GET = $get + (isset($get['self']) ? ['userid' => $user->id] : []);
+
+        $html = $this->run_page('index.php');
+
+        $this->assertStringContainsString(get_string('req_title', 'local_academictranscript'), $html);
+        foreach (['view_staff', 'editdetails', 'transfercredits', 'courseterms', 'issueofficial'] as $key) {
+            $this->assertStringNotContainsString(get_string($key, 'local_academictranscript'), $html);
+        }
+    }
+
+    /**
+     * Data for test_my_transcript_is_all_a_user_without_tools_gets.
+     *
+     * @return array
+     */
+    public static function plain_user_provider(): array {
+        return [
+            'a user in no course' => ['', []],
+            'a student' => ['student', []],
+            'a student with their own id in the address' => ['student', ['self' => 1]],
+            'a student who asks for the staff view' => ['student', ['view' => 'staff']],
+            'a student who asks for My transcript' => ['student', ['view' => 'mine']],
+            'a teacher' => ['editingteacher', []],
+        ];
+    }
+
+    /**
+     * On another student's page there is one view, so there are no tabs, and asking for My transcript changes nothing.
+     */
+    public function test_another_students_page_has_no_tabs(): void {
+        $student = $this->getDataGenerator()->create_user();
+        $this->make_manager();
+        $_GET = ['userid' => $student->id, 'view' => 'mine'];
+
+        $html = $this->run_page('index.php');
+
+        $this->assertStringContainsString(get_string('editdetails', 'local_academictranscript'), $html);
+        $this->assertStringNotContainsString(get_string('view_staff', 'local_academictranscript'), $html);
+        $this->assertStringNotContainsString(get_string('req_title', 'local_academictranscript'), $html);
+    }
+
+    /**
+     * The student's page prints the key of the scale the transcript was counted on.
+     */
+    public function test_the_student_page_prints_the_key_of_student_records(): void {
+        global $DB;
+        if (!class_exists('\\local_studentrecords\\local\\registration')) {
+            $this->markTestSkipped('Student Records is not installed.');
+        }
+        set_config('source', 'studentrecords', 'local_academictranscript');
+        set_config('setupcomplete', 1, 'local_academictranscript');
+        $this->setAdminUser();
+        $user = $this->getDataGenerator()->create_user();
+        $sr = $this->getDataGenerator()->get_plugin_generator('local_studentrecords');
+        $sr->create_scale();
+        $DB->set_field('local_studentrecords_grade', 'description', 'Excellent work', ['letter' => 'A']);
+        $sr->create_student(['userid' => $user->id, 'studentid' => 'S-1']);
+
+        $_GET['userid'] = $user->id;
+        $html = $this->run_page('index.php');
+
+        $this->assertStringContainsString('Excellent work', $html);
+    }
+
+    /**
+     * The codes page shows a student with a file the letter and the marks of Student Records.
+     */
+    public function test_the_codes_page_follows_student_records_for_a_student_with_a_file(): void {
+        global $DB;
+        if (!class_exists('\\local_studentrecords\\local\\registration')) {
+            $this->markTestSkipped('Student Records is not installed.');
+        }
+        set_config('source', 'studentrecords', 'local_academictranscript');
+        set_config('setupcomplete', 1, 'local_academictranscript');
+        $this->setAdminUser();
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_academictranscript');
+        $sr = $this->getDataGenerator()->get_plugin_generator('local_studentrecords');
+        $term = $generator->create_term();
+        $course = $generator->create_course_with_fields(['code' => 'BIO 101', 'hours' => 3, 'hourtype' => 'credit',
+            'termid' => $term->id]);
+        $user = $this->getDataGenerator()->create_user();
+        $this->getDataGenerator()->enrol_user($user->id, $course->id, 'student');
+        $generator->set_course_total($course->id, $user->id, 92.0);
+        $sr->create_scale();
+        $DB->insert_record('local_studentrecords_grade', (object)['letter' => 'AU', 'ingpa' => 0, 'earns' => 0, 'sortorder' => 9,
+            'timemodified' => time()]);
+        $offer = $sr->create_offering(['courseid' => $sr->create_course(['code' => 'BIO 101'])->id,
+            'termid' => $sr->create_term()->id, 'moodlecourseid' => $course->id]);
+        $student = $sr->create_student(['userid' => $user->id, 'studentid' => 'S-1']);
+        // On Moodle 4.5 the email about the registration sets up the theme, and then the page can't set its course.
+        $messages = $this->redirectMessages();
+        $sr->create_registration(['studentid' => $student->id, 'offerid' => $offer->id]);
+
+        $_GET['courseid'] = $course->id;
+        $html = $this->run_page('codes.php');
+        $messages->close();
+
+        $this->assertStringContainsString('92.00% (A)', $html);
+        $this->assertStringContainsString('value="AU"', $html);
+    }
+
+    /**
+     * The Marks step of the setup wizard says which students it covers, as the Marks page does.
+     */
+    public function test_the_marks_step_says_which_students_it_covers(): void {
+        if (!class_exists('\\local_studentrecords\\local\\registration')) {
+            $this->markTestSkipped('Student Records is not installed.');
+        }
+        set_config('source', 'studentrecords', 'local_academictranscript');
+        $this->setAdminUser();
+
+        $_GET['step'] = 'marks';
+        $html = $this->run_page('setup.php');
+
+        $this->assertStringContainsString(get_string('scale_usesstudentrecords', 'local_academictranscript'), $html);
+    }
+
+    /**
+     * Staff can't issue their own Official transcript: their page has a line saying so in place of the form, and a forged
+     * post issues nothing.
+     */
+    public function test_staff_cannot_issue_their_own_transcript(): void {
+        global $DB, $USER;
+        set_config('setupcomplete', 1, 'local_academictranscript');
+        $this->setAdminUser();
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_academictranscript');
+        $generator->create_student_record(['userid' => $USER->id, 'studentid' => 'S-1']);
+
+        $html = $this->run_page('index.php');
+
+        $this->assertStringContainsString(get_string('issueown', 'local_academictranscript'), $html);
+        $this->assertStringNotContainsString('name="recipient"', $html);
+
+        $_POST = ['action' => 'issue', 'recipient' => 'Office', 'sesskey' => sesskey()];
+        $this->failure(fn() => $this->run_page('index.php'));
+        $this->assertSame(0, $DB->count_records('local_academictranscript_issue'));
+    }
+
+    /**
+     * On the queue, a person's own request shows the reason in place of Issue, and someone else's keeps the button.
+     */
+    public function test_the_queue_offers_no_issue_on_ones_own_request(): void {
+        global $USER;
+        $this->setAdminUser();
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_academictranscript');
+        $other = $this->getDataGenerator()->create_user(['firstname' => 'Ana', 'lastname' => 'Ruiz']);
+        requests::create((int)$USER->id, ['delivery' => 'pickup', 'recipient' => 'Own copy', 'timing' => 'now']);
+
+        $html = $this->run_page('requests.php');
+
+        $this->assertStringContainsString(get_string('issueown', 'local_academictranscript'), $html);
+        $this->assertStringNotContainsString('name="do" value="issue"', $html);
+
+        requests::create((int)$other->id, ['delivery' => 'pickup', 'recipient' => 'Their copy', 'timing' => 'now']);
+        $this->assertStringContainsString('name="do" value="issue"', $this->run_page('requests.php'));
     }
 
     /**
@@ -409,6 +867,101 @@ final class pages_test extends \advanced_testcase {
 
         $this->assertSame('redirecterrordetected', $error->errorcode);
         $this->assertSame('rejected', $DB->get_field('local_academictranscript_change', 'status', ['id' => $changeid]));
+    }
+
+    /**
+     * The approvals page offers the buttons to someone who may decide.
+     */
+    public function test_approvals_page_offers_the_buttons(): void {
+        $this->request_change();
+
+        $html = $this->run_page('approvals.php');
+
+        $this->assertStringContainsString('name="decision"', $html);
+        $this->assertStringNotContainsString(get_string('changeownrequest', 'local_academictranscript'), $html);
+    }
+
+    /**
+     * The approvals page has no buttons on a request of the person who reads it, or on their own grade, and says why.
+     *
+     * @dataProvider own_change_provider
+     * @param bool $ownrequest Whether the admin asked for the change
+     * @param bool $owngrade Whether it is the admin's grade
+     * @param string $reason The language string id of the reason
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('own_change_provider')]
+    public function test_approvals_page_has_no_buttons_on_your_own(bool $ownrequest, bool $owngrade, string $reason): void {
+        $this->request_change($owngrade ? get_admin() : null, $ownrequest ? get_admin() : null);
+
+        $html = $this->run_page('approvals.php');
+
+        $this->assertStringContainsString(get_string($reason, 'local_academictranscript'), $html);
+        $this->assertStringNotContainsString('name="decision"', $html);
+    }
+
+    /**
+     * A decision on your own request or grade that reaches the page anyway changes nothing.
+     *
+     * @dataProvider own_change_provider
+     * @param bool $ownrequest Whether the admin asked for the change
+     * @param bool $owngrade Whether it is the admin's grade
+     * @param string $reason The language string id of the reason, which the page shows after its redirect
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('own_change_provider')]
+    public function test_approvals_page_refuses_a_decision_on_your_own(bool $ownrequest, bool $owngrade, string $reason): void {
+        global $DB;
+        $changeid = $this->request_change($owngrade ? get_admin() : null, $ownrequest ? get_admin() : null);
+
+        $_POST = ['changeid' => $changeid, 'decision' => 'approve', 'sesskey' => sesskey()];
+        $this->assertSame('redirecterrordetected', $this->failure(fn() => $this->run_page('approvals.php'))->errorcode);
+
+        $this->assertSame('pending', $DB->get_field('local_academictranscript_change', 'status', ['id' => $changeid]));
+        $this->assertSame('B', $DB->get_field_sql('SELECT p.grade FROM {local_academictranscript_posted} p
+                                                     JOIN {local_academictranscript_change} c ON c.postedid = p.id
+                                                    WHERE c.id = ?', [$changeid]));
+    }
+
+    /**
+     * Data for the tests of a change on your own request or grade.
+     *
+     * @return array
+     */
+    public static function own_change_provider(): array {
+        return [
+            'your own request' => [true, false, 'changeownrequest'],
+            'your own grade, asked by someone else' => [false, true, 'changeownrecord'],
+            'your own grade, asked by you' => [true, true, 'changeownrecord'],
+        ];
+    }
+
+    /**
+     * The post page has no box on a person's own row, and says why. The other students keep theirs.
+     */
+    public function test_post_page_has_no_box_on_your_own_row(): void {
+        [$course, $manager, $other] = $this->make_manager_who_studies();
+
+        $_GET['courseid'] = $course->id;
+        $html = $this->run_page('post.php');
+
+        $this->assertStringContainsString(s(get_string('ownposting', 'local_academictranscript')), $html);
+        $this->assertStringNotContainsString('name="post[' . $manager->id . ']"', $html);
+        $this->assertStringContainsString('name="post[' . $other->id . ']"', $html);
+    }
+
+    /**
+     * A post for a person's own row that reaches the page anyway changes nothing, and another student in the same post is
+     * saved.
+     */
+    public function test_post_page_refuses_your_own_row(): void {
+        global $DB;
+        [$course, $manager, $other] = $this->make_manager_who_studies();
+
+        $_GET['courseid'] = $course->id;
+        $_POST = ['post' => [$manager->id => 1, $other->id => 1], 'sesskey' => sesskey()];
+        $this->assertSame('redirecterrordetected', $this->failure(fn() => $this->run_page('post.php'))->errorcode);
+
+        $this->assertSame(0, $DB->count_records('local_academictranscript_posted', ['userid' => $manager->id]));
+        $this->assertSame(1, $DB->count_records('local_academictranscript_posted', ['userid' => $other->id]));
     }
 
     /**
@@ -633,21 +1186,58 @@ final class pages_test extends \advanced_testcase {
     }
 
     /**
-     * Sign in as the admin and ask for a change to the posted grade of a student.
+     * Sign in as a manager with the setup finished. A manager, not the admin, because a site admin passes every check.
      *
+     * @return \stdClass the user
+     */
+    private function make_manager(): \stdClass {
+        global $DB;
+        $user = $this->getDataGenerator()->create_user();
+        role_assign($DB->get_field('role', 'id', ['shortname' => 'manager']), $user->id, SYSCONTEXTID);
+        set_config('setupcomplete', 1, 'local_academictranscript');
+        $this->setUser($user);
+        return $user;
+    }
+
+    /**
+     * Sign in as a manager who is also a student of a course, with another student beside them. Both have a course total.
+     *
+     * @return array the course, the manager and the other student
+     */
+    private function make_manager_who_studies(): array {
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_academictranscript');
+        $term = $generator->create_term();
+        $course = $generator->create_course_with_fields(['code' => 'BIO 101', 'hours' => 3, 'hourtype' => 'credit',
+            'termid' => $term->id]);
+        $manager = $this->make_manager();
+        $other = $this->getDataGenerator()->create_user();
+        foreach ([$manager, $other] as $user) {
+            $this->getDataGenerator()->enrol_user($user->id, $course->id, 'student');
+            $generator->set_course_total($course->id, $user->id, 90);
+        }
+        return [$course, $manager, $other];
+    }
+
+    /**
+     * Ask for a change to the posted grade of a student, then sign in as the admin.
+     *
+     * @param \stdClass|null $student Whose grade it is, or null for a new student
+     * @param \stdClass|null $requester Who asks for the change, or null for a new user
      * @return int id of the change request, which is waiting
      */
-    private function request_change(): int {
+    private function request_change(?\stdClass $student = null, ?\stdClass $requester = null): int {
         $generator = $this->getDataGenerator()->get_plugin_generator('local_academictranscript');
         $term = $generator->create_term(['name' => 'Fall 2026']);
         $course = $this->getDataGenerator()->create_course();
-        $student = $this->getDataGenerator()->create_user();
+        $student = $student ?? $this->getDataGenerator()->create_user();
         $posted = $generator->create_posted_grade(['userid' => $student->id, 'courseid' => $course->id,
             'termid' => $term->id, 'grade' => 'B']);
+        $this->setUser($requester ?? $this->getDataGenerator()->create_user());
+        $changeid = posting::request_change($posted->id, 'A', '', 'The exam was marked again.');
         $this->setAdminUser();
         set_config('setupcomplete', 1, 'local_academictranscript');
 
-        return posting::request_change($posted->id, 'A', '', 'The exam was marked again.');
+        return $changeid;
     }
 
     /**

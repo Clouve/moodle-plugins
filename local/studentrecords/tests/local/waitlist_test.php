@@ -157,6 +157,20 @@ final class waitlist_test extends \advanced_testcase {
     }
 
     /**
+     * Students can't register in a term that isn't active, so a withdrawal there offers no seat.
+     */
+    public function test_no_seat_is_offered_in_a_term_that_is_not_active(): void {
+        global $DB;
+        $first = $this->student();
+        waitlist::join($first, (int)$this->offer->id);
+        $DB->set_field('local_studentrecords_term', 'active', 0, ['id' => $this->offer->termid]);
+
+        registration::end($this->regid, 'withdraw', true, 'Moved away');
+
+        $this->assertSame('waiting', waitlist::entry((int)$first->id, (int)$this->offer->id)->status);
+    }
+
+    /**
      * Joining twice gives the same place; a student with a seat can't join; a section without a limit has no waitlist.
      */
     public function test_join_checks(): void {
@@ -206,5 +220,44 @@ final class waitlist_test extends \advanced_testcase {
         registration::end($this->regid, 'drop', true, 'test');
 
         $this->assertSame('waiting', waitlist::entry((int)$first->id, (int)$this->offer->id)->status);
+    }
+
+    /**
+     * A prerequisite added after the student joined means they couldn't take the seat. They are passed over and keep their
+     * place, and the next student gets the offer at once instead of two days later.
+     */
+    public function test_a_student_who_lacks_a_prerequisite_is_passed_over(): void {
+        global $DB;
+        [$first, $second] = [$this->student(), $this->student()];
+        waitlist::join($first, (int)$this->offer->id);
+        waitlist::join($second, (int)$this->offer->id);
+        $required = $this->gen->create_course(['code' => 'BIO 100']);
+        $DB->insert_record('local_studentrecords_prereq', (object)['courseid' => $this->offer->courseid,
+            'reqcourseid' => $required->id]);
+        $DB->insert_record('local_studentrecords_xfer', (object)['studentid' => $second->id, 'institution' => 'Riverside',
+            'credits' => 3, 'equivcourseid' => $required->id, 'timecreated' => time()]);
+
+        registration::end($this->regid, 'drop', true, 'test');
+
+        $this->assertSame('waiting', waitlist::entry((int)$first->id, (int)$this->offer->id)->status);
+        $this->assertSame('offered', waitlist::entry((int)$second->id, (int)$this->offer->id)->status);
+    }
+
+    /**
+     * A section that no longer has a limit offers a seat to everyone waiting.
+     */
+    public function test_a_section_with_no_limit_offers_everyone(): void {
+        global $DB;
+        $students = [$this->student(), $this->student(), $this->student()];
+        foreach ($students as $s) {
+            waitlist::join($s, (int)$this->offer->id);
+        }
+        $DB->set_field(registration::OFFER, 'capacity', null, ['id' => $this->offer->id]);
+
+        $this->assertSame(3, waitlist::seat_opened((int)$this->offer->id));
+
+        foreach ($students as $s) {
+            $this->assertSame('offered', waitlist::entry((int)$s->id, (int)$this->offer->id)->status);
+        }
     }
 }

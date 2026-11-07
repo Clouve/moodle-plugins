@@ -11,12 +11,12 @@ Nothing about a particular school is built in. Names, the calendar, grading, rul
 - The setup wizard takes the school through its details, approvals, calendar, grading, programs, courses, admissions, billing, staff and import. Every answer can be changed later. Each item imported from a spreadsheet (.xlsx) or CSV file is a draft until staff approve it.
 - Programs use credit hours or clock hours. The course catalog has prerequisites, terms have add and drop and withdraw dates, and the school sets its own grading scale and pass rules.
 - Each student has one file with a change history: admissions, documents, holds, academic standing, transfer credit and graduation. Staff can open "View as student" to see what the student sees.
-- Admissions covers applicants, a document checklist, decisions and waitlists. Admitting someone creates the student record.
+- Admissions covers inquiries, applicants, a document checklist, decisions and waitlists. A person has a student record from the first inquiry, and each decision moves it along.
 - Faculty and staff records hold degrees and licenses with expiry dates and the courses each teacher may teach.
 - Registration runs on course offerings with days, times, rooms and seats. Staff register students. A school can also let students register themselves, with a cart, a cost estimate, a time clash check and waitlists. That is off by default, and it is open only to admitted, enrolled and active students. Anyone else reads why and goes through the registrar's office.
-- Registering enrols the student in the linked Moodle course. A drop or withdrawal suspends the enrolment and never removes it.
+- Registering enrols the student in the linked Moodle course, unless the course access rule in Billing setup says to wait for a payment. A drop or withdrawal suspends the enrolment and never removes it.
 - Final grades come from teachers, from the Moodle gradebook or from staff. Staff can correct a grade until the term's grade freeze, and the change history keeps the old value. After the freeze, a change needs a second person to approve it.
-- Degree audits, graduation applications and conferral with honors.
+- Degree audits, graduation applications and conferral with honors. A program with no course list is audited on hours and GPA: only courses in the program's unit count, each course counts once however many times it was passed, transfer credit counts when it is marked to count toward the program, and a course and its transfer equivalent count once. A program with no course list, no total hours and no minimum GPA has nothing to audit, so approving needs a note.
 - Attendance: class meetings, present, late, absent or excused, hours attended, last date of attendance and students at risk.
 - Billing: a price list, charges when a student registers, student accounts and statements, online payments through Moodle's payment providers, payments recorded by staff, receipts, payment plans, late fees and holds, refunds by the school's own rules with approval, money reports and a 1098-T spreadsheet. Amounts are in US dollars. Nobody can decide a refund on their own account.
 - Automatic messages for registration, payments, holds, refunds, grades, admission and graduation. They say only that there is something new and ask the person to log in, with no grades or amounts. Each can be turned off or reworded, and test mode keeps them away from real people.
@@ -59,14 +59,15 @@ Open the staff area at `/local/studentrecords/staff.php`. Admins also find it at
 
 1. School: name, address, contact, registrar, time zone and logo.
 2. Approvals: state agency and license, accreditor, the optional federal aid module (only if the school is approved for Title IV aid), the optional F-1 module (only if the school is approved to issue I-20s), and the FERPA annual notice text.
-3. Calendar: calendar type, academic year start, terms, withdraw rule, minimum attendance, attendance and refund options, full-time credit hours, and "Students register themselves".
+3. Calendar: calendar type, academic year start, terms, withdraw rule, minimum attendance, the at-risk course grade, attendance and refund options, full-time credit hours, and "Students register themselves". Students at risk lists a Moodle course grade under the at-risk percent. Empty means 70, and 0 leaves grades out.
 4. Grading: your grading scale, marks such as W and I, levels and pass rules.
 5. Programs.
 6. Courses. For programs and courses you can work by hand or import your catalog spreadsheet. Staff review every item first.
 7. Admissions: student ID format, application checklist and honors rules.
-8. Billing, on the Billing setup page: price list, payment account, course access rule, payment plans, refund rules, statement text and 1098-T settings. Billing stays off until you turn it on.
+8. Billing, on the Billing setup page: price list, payment account, course access rule, payment plans, refund rules, statement text and 1098-T settings. Billing stays off until you turn it on. A student has one active payment plan at a time, for any term, so finish or cancel a plan before giving a new one. A returned payment doesn't reopen a completed plan while another plan is active: Finance gets a warning and a note on the plan. A reversal of a line from before a plan doesn't count against that plan.
 9. Staff: faculty and staff records, and roles (see below).
-10. Summary: check that nothing important is missing.
+10. Import: bring records in from a spreadsheet or CSV file. Staff review every item first.
+11. Summary: check that nothing important is missing.
 
 After that:
 
@@ -83,12 +84,16 @@ After that:
 
 Each school creates its own payment accounts and keys. Online payments stay off until it does.
 
-Moodle's cron must run. The daily task "Student Records billing" sends plan reminders and handles late plan payments, and the daily task "Student Records waitlists" offers freed seats.
+A task runs every 5 minutes and records any payment that reached Moodle but not the student's account, with the same checks as a normal delivery and the payment's own date. Until then the student sees the same balance and can still pay online, so Finance pays back a second payment made in that gap. The recovery covers payments made after the plugin was installed or upgraded to this version. Older payments stay as they are, even with no account line.
+
+One course that can't open doesn't keep a student's other courses waiting. It stays on the account page for staff, and the audit log says why. A line that lowers the balance stands even if a course can't open.
+
+Moodle's cron must run. A message written during other work, such as a grade or a registration, waits for the next cron run, and the message log shows Waiting to send until it goes. Test mode and the message's switch are read when it goes. A failed message is logged and not tried again. The daily task "Student Records billing" sends plan reminders and handles late plan payments, and the daily task "Student Records waitlists" ends offers not taken and offers free seats to students waiting. It offers a seat while self-registration is on, the section and term are open, and the add period hasn't ended. A student who couldn't register for any reason other than the full section is passed over and keeps their place.
 
 ## Where things are
 
-- Everyone: the "Student Records" tab in the top menu, then the menu. On the Student Records theme the menu is a left drawer.
-- Students: My home, My account, My academic record, My documents and, when the school turns it on, Register for classes.
+- Everyone: the "Student Records" tab in the top menu, then the menu. On the Student Records theme the menu is a left drawer. On other themes it is a box at the top of the page, folded on small screens.
+- Students: My home, My account, My academic record, Registration and My documents. Registration lets them register themselves when the school turns that on.
 - Staff: the Student Records home page and the staff area at `/local/studentrecords/staff.php`, with its own menu.
 - Teachers: in a course, More > "Student records" for that course's students, and the "Attendance" tab when the course is linked to a course offering.
 
@@ -99,8 +104,8 @@ Managers can do everything. Teachers see only the students of their own courses,
 | Capability | Lets the holder | Level | Default roles |
 |---|---|---|---|
 | `local/studentrecords:viewown` | View own student record | System | Authenticated user |
-| `local/studentrecords:viewstudents` | View student records (in a course: its students only) | Course | Teacher, Manager |
-| `local/studentrecords:takeattendance` | Take attendance for course offerings | Course | Teacher, Manager |
+| `local/studentrecords:viewstudents` | View student records (in a course: its students only) | Course | Teacher, Non-editing teacher, Manager |
+| `local/studentrecords:takeattendance` | Take attendance for course offerings | Course | Teacher, Non-editing teacher, Manager |
 | `local/studentrecords:managestudents` | Manage student records | System | Manager |
 | `local/studentrecords:viewdemographics` | View student demographics (IPEDS) | System | Manager |
 | `local/studentrecords:approvegradechange` | Approve or reject grade changes | System | Manager |
@@ -110,27 +115,25 @@ Managers can do everything. Teachers see only the students of their own courses,
 | `local/studentrecords:managebilling` | Manage student accounts, prices, payments, payment plans and refunds | System | Manager |
 | `local/studentrecords:approverefund` | Approve or reject refunds | System | Manager |
 | `local/studentrecords:viewaid` | See aid awards and aid reports (federal aid module) | System | Manager |
-| `local/studentrecords:manageaid` | Manage aid awards and record aid disbursements (federal aid module) | System | Manager |
+| `local/studentrecords:manageaid` | Manage aid awards, and record and reverse aid disbursements (federal aid module) | System | Manager |
 | `local/studentrecords:configure` | Set up the school, programs, courses, terms and grading | System | Manager |
 | `local/studentrecords:import` | Import from spreadsheets | System | Manager |
 | `local/studentrecords:viewlog` | View the audit log | System | Manager |
 
 Set up these roles for your staff:
 
-- Registrar: make a system role with manage students, view students, view student demographics, view faculty and view log at Site administration > Users > Permissions > Define roles, and assign it at system level. Saved exports that list race, ethnicity or sex need view student demographics, and all three starter exports do. Without it the card of such an export says so and has no Run button. Add approve grade changes if the Registrar decides them. With Academic Transcript, add its issue, approve and manage capabilities too.
+- Registrar: make a system role with manage students, view students, view student demographics, view faculty and view log at Site administration > Users > Permissions > Define roles, and assign it at system level. Saved exports that list race, ethnicity or sex need view student demographics, and all three starter exports do. Without it the card of such an export says so and has no Run button. The Counts tab needs it too: without it there are no counts by race and sex and no download of them, and completions by program stay. Add approve grade changes if the Registrar decides them. Someone with approve grade changes who doesn't manage students opens Grade changes and sees only the waiting requests they can decide. Nobody decides their own request or their own grade, enters or posts their own final grade, or reviews or confers their own graduation application. On their own record, staff can't change the status, award or program, add or edit transfer credit, approve a substitution, record an admission decision or create the record. Contact details stay theirs to edit. Staff with a student file request a grade change like anyone else. With Academic Transcript, add its issue, approve and manage capabilities too.
 - Finance: Billing setup > "Create the Finance role", then "Give people the Finance role".
-- Financial Aid, only with the federal aid module on: Staff area > Federal aid > "Create the Financial Aid role", then "Give people the Financial Aid role". It is separate from Finance.
+- Financial Aid, only with the federal aid module on: Staff area > Federal aid > "Create the Financial Aid role", then "Give people the Financial Aid role". It is separate from Finance. Reversing an aid line needs manage aid, and Financial Aid staff do it under Disbursements on the student's aid page. That includes the "Federal aid returned" charge.
 - Staff who never use courses: tick "No LMS access" on their staff record.
 
 ## With Academic Transcript
 
 Install [Academic Transcript](../academictranscript/README.md) and set its "Source of the transcript" setting to Student Records. Student Records then feeds the transcript, teachers' "Post final grades" saves grades on the student's registration, and teacher change requests arrive in the grade change queue here. A transcript request adds its fee to the student's account when billing is on, and holds here stop a transcript from going out.
 
-Keep the grading scale and marks of both plugins in step. Academic Transcript works out the GPA on the transcript with its own scale, and it stops an Official transcript when a grade from Student Records isn't on that scale.
+When Academic Transcript reads from Student Records, it counts on the grading scale here, so there is one scale to keep. The record and the transcript show the same GPA and hours earned, and that includes a program's minimum passing grade and transfer credit marked "in GPA". The transcript stops an Official transcript when a grade isn't on the scale.
 
 Student Records follows Academic Transcript's repeat rule, and it asks that plugin's calculator which attempts count, so the record, the degree audit, academic standing and the transcript leave out the same ones. An attempt the rule leaves out stays on the record with the tag "Repeated: not counted". It counts as attempted, but not as earned and not in the GPA, and it meets no degree requirement. A retake in progress leaves the earlier grade counting until the retake has a grade. A standing for an earlier term uses what counted at the end of that term. Without Academic Transcript every attempt counts.
-
-The record and the transcript can still show different figures in two cases. A program's minimum passing grade keeps a course's hours from being earned here, while the transcript counts them. Transfer credit marked "in GPA" counts in the GPA here and not on the transcript.
 
 ## Federal aid helpers
 
@@ -155,7 +158,7 @@ Return of aid worksheet (34 CFR 668.22):
 
 The worksheet doesn't save what staff enter. The Return of aid item for Finance holds the result, and the audit log keeps the details. If the figures change between opening the worksheet and sending it, nothing is sent. Finance approves the item, which puts the returned aid back on the student's account, and sends the money to the Department of Education. Nothing is paid to the student.
 
-Federal aid needs a term on its award, because every worksheet and loan check works by term. Older awards with no term are listed on the worksheet.
+Federal aid needs a term on its award, because every worksheet and loan check works by term. The worksheet shows the total of older awards with no term.
 
 ## Upgrade
 
@@ -175,7 +178,7 @@ The uninstall also puts the start page back to Moodle's default if it was Studen
 
 ## Privacy
 
-The plugin supports Moodle's privacy tools (Site administration > Users > Privacy and policies > Data requests). The student is the data subject. An export holds everything about the person: the record, documents, account, plans, refunds, attendance, aid, the message log, the change history, audit log entries, and what the person did as staff. For staff, that last part lists record ids and dates, without the student's data.
+The plugin supports Moodle's privacy tools (Site administration > Users > Privacy and policies > Data requests). The student is the data subject. An export holds the person's data: the record, documents, account, plans, refunds, attendance, aid, the message log, the change history, audit log entries without their details, and what the person did as staff. For staff, that last part lists record ids and dates, without the student's data.
 
 A deletion request removes what a school doesn't have to keep:
 
@@ -183,13 +186,21 @@ A deletion request removes what a school doesn't have to keep:
 - Emergency contacts, demographics, and the notes on the application checklist and on prior education.
 - Student documents, the self-registration cart, waitlist places and the message log.
 - On a faculty record: email, phone, office hours and notes.
+- Moodle's record of the student's online payments, and what the payment provider keeps.
+- The details of audit log entries about the person. The entries stay.
 
 It keeps the rest, because a school must:
 
 - The permanent academic record: legal name, student ID, date of birth, program, terms, status, award, admission decisions, prior education, registrations, grades, grade changes, transfer credit, academic standing, attendance, holds and graduation applications.
 - FERPA records: notice acknowledgments, release authorizations, and letters issued.
-- The student account: account lines, online payment requests, refunds and payment plans. The payment itself is in Moodle's payment system, which handles its own export and deletion.
+- The student account: account lines, online payment requests, refunds and payment plans.
 - Aid awards and aid year details.
+
+An export also includes Moodle's record of the student's online payments.
+
+On every supported Moodle version, core's fee enrolment plugin raises an error while Moodle deletes payment data for a user, so the privacy officer gets an "Exception occurred while processing privacy data" notice. The request still ends as deleted, and this plugin removes the payments itself.
+
+A deletion request for an account Moodle has already removed is finished within the hour by the task "Student Records privacy". It acts only on requests a privacy officer approved and Moodle finished, and it erases what any deletion erases, payments included.
 
 The plugin's retention choices are a starting point. Each school should check them against its own legal duties, and add its own FERPA notice.
 

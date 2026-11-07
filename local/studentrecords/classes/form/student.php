@@ -72,6 +72,9 @@ class student extends \moodleform {
             ['' => get_string('none')] + get_string_manager()->get_list_of_countries()
         );
         $m->addElement('header', 'h_academic', get_string('sec_academic', $p));
+        if (!empty($this->_customdata['own'])) {
+            $m->addElement('static', 'ownnote', '', get_string('ownrecord_note', $p));
+        }
         $m->addElement('select', 'programid', get_string('program', $p), [0 => get_string('none')] + $catalog::programs());
         $m->addElement('select', 'admittermid', get_string('admitterm', $p), [0 => get_string('none')] +
             array_map('format_string', $catalog::terms()));
@@ -96,6 +99,9 @@ class student extends \moodleform {
         $m->addElement('text', 'awardname', get_string('awardname', $p), ['size' => 50]);
         $m->setType('awardname', PARAM_TEXT);
         $m->addElement('date_selector', 'awarddate', get_string('awarddate', $p), ['optional' => true]);
+        if (!empty($this->_customdata['own'])) {
+            $m->hardFreeze(['programid', 'status', 'statusnote', 'awardname', 'awarddate']);
+        }
         $m->addElement('header', 'h_reporting', get_string('sec_reporting', $p));
         $choices = [
             'residency' => ['instate', 'outofstate', 'international'],
@@ -140,7 +146,7 @@ class student extends \moodleform {
      * @return array
      */
     public function validation($data, $files) {
-        global $DB;
+        global $DB, $USER;
         $errors = parent::validation($data, $files);
         $hsyear = trim((string)($data['hsyear'] ?? ''));
         if ($hsyear !== '' && (!ctype_digit($hsyear) || (int)$hsyear < 1900 || (int)$hsyear > 2100)) {
@@ -168,6 +174,9 @@ class student extends \moodleform {
                 $DB->record_exists('local_studentrecords_student', ['userid' => $data['userid']])
         ) {
             $errors['userid'] = get_string('err_hasrecord', 'local_studentrecords');
+        }
+        if (empty($data['id']) && (int)($data['userid'] ?? 0) === (int)$USER->id) {
+            $errors['userid'] = get_string('err_ownrecord', 'local_studentrecords');
         }
         $dob = \local_studentrecords\local\dates::parts_to_ymd(
             $data['dob_day'] ?? '',

@@ -854,6 +854,7 @@
         <INDEX NAME="reverses" UNIQUE="false" FIELDS="reverses"/>
         <INDEX NAME="chargeid" UNIQUE="false" FIELDS="chargeid"/>
         <INDEX NAME="aidid" UNIQUE="false" FIELDS="aidid"/>
+        <INDEX NAME="paymentid" UNIQUE="false" FIELDS="paymentid"/>
       </INDEXES>
     </TABLE>
     <TABLE NAME="local_studentrecords_payreq" COMMENT="Online payments started by a student through Moodle's payment system: open until the payment provider confirms it">

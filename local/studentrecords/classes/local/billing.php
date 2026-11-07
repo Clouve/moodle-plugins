@@ -48,6 +48,12 @@ class billing {
     /** @var float The largest amount the account tables can hold. */
     const MAXAMOUNT = 9999999999.99;
 
+    /** @var int How many calls of one_at_a_time() are running in this request. */
+    protected static $running = 0;
+
+    /** @var \stdClass[] Students to bring up to date once the lock on the accounts ends, by id. */
+    protected static $afterlock = [];
+
     /** @var string Shortname of the Finance role the setup page can create. */
     const FINANCEROLE = 'srfinance';
 
@@ -311,11 +317,11 @@ class billing {
         $transaction = $DB->start_delegated_transaction();
         try {
             $result = $work();
-            $transaction->allow_commit();
-            return $result;
         } catch (\Throwable $e) {
             $transaction->rollback($e);
         }
+        records::commit($transaction);
+        return $result;
     }
 
     /**
@@ -323,11 +329,45 @@ class billing {
      * callbacks can't both see the same balance, request or line and both act on it. Don't call this from inside a
      * transaction that was started some other way: the lock must outlast the commit.
      *
+     * Every account waits while this runs, so nothing in it may wait on a mail server. The plugin's messages wait for cron
+     * (see messages), and course access waits until the lock ends, because enrolling can make Moodle send a course's welcome
+     * message at the commit.
+     *
      * @param callable $work
      * @return mixed what the work returns
      */
     public static function one_at_a_time(callable $work) {
-        return registration::with_lock('accounts', fn() => self::transaction($work));
+        self::$running++;
+        try {
+            $result = registration::with_lock('accounts', fn() => self::transaction($work));
+        } catch (\Throwable $e) {
+            self::$afterlock = [];
+            throw $e;
+        } finally {
+            self::$running--;
+        }
+        if (!self::$running) {
+            $students = self::$afterlock;
+            self::$afterlock = [];
+            foreach ($students as $student) {
+                payments::settle($student);
+            }
+        }
+        return $result;
+    }
+
+    /**
+     * Leave a student's waiting course access for when the lock on the accounts ends, if the lock is held now.
+     *
+     * @param \stdClass $student
+     * @return bool false when no lock is held: the work can go on now
+     */
+    public static function after_lock(\stdClass $student): bool {
+        if (!self::$running) {
+            return false;
+        }
+        self::$afterlock[$student->id] = $student;
+        return true;
     }
 
     /**
@@ -337,19 +377,21 @@ class billing {
      * @return int id
      */
     public static function add_line(array $data): int {
-        return self::transaction(function () use ($data) {
+        $student = students::get((int)$data['studentid']);
+        $lowered = (float)$data['amount'] < 0;
+        $id = self::transaction(function () use ($data, $student, $lowered) {
             $id = self::insert_line($data);
-            $student = students::get((int)$data['studentid']);
-            $lowered = (float)$data['amount'] < 0;
             // A returned payment counts back on a plan as much as a new payment counts toward it.
             if ($lowered || in_array($data['txntype'], ['payment', 'credit'], true)) {
                 plans::sync($student);
             }
-            if ($lowered) {
-                payments::release($student);
-            }
             return $id;
         });
+        if ($lowered) {
+            // After the line is saved, so that a course that can't open doesn't undo it.
+            payments::release($student);
+        }
+        return $id;
     }
 
     /**
@@ -381,8 +423,21 @@ class billing {
     }
 
     /**
+     * Whether an account line is aid: a line of an award (a disbursement or the reversal of one), a federal kind of credit,
+     * which only an award adds, or a line of a return of aid.
+     *
+     * @param \stdClass $line
+     * @return bool
+     */
+    public static function is_aid_line(\stdClass $line): bool {
+        global $DB;
+        return !empty($line->aidid) || in_array($line->method, self::AIDKINDS, true) ||
+            (!empty($line->refundid) && $DB->record_exists(refunds::REFUNDS, ['id' => $line->refundid, 'reason' => 'aidreturn']));
+    }
+
+    /**
      * Reverse an account line with a reason: a new line with the opposite amount; the first line is marked as
-     * reversed (that mark is kept in the change history).
+     * reversed (that mark is kept in the change history). An aid line needs the manage aid permission, on any page.
      *
      * @param int $txnid
      * @param string $reason
@@ -392,6 +447,9 @@ class billing {
         return self::one_at_a_time(function () use ($txnid, $reason) {
             global $DB;
             $line = $DB->get_record(self::TXN, ['id' => $txnid], '*', MUST_EXIST);
+            if (self::is_aid_line($line)) {
+                require_capability('local/studentrecords:manageaid', \context_system::instance());
+            }
             if ($line->reversedby || $line->reverses) {
                 throw new \moodle_exception('err_cannotreverse', 'local_studentrecords');
             }

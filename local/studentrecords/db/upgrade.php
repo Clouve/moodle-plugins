@@ -346,7 +346,7 @@ function xmldb_local_studentrecords_upgrade($oldversion) {
         // Indexes for the change history of a user (privacy requests), and for the account lines found by these fields.
         $indexes = [
             'local_studentrecords_history' => ['userid'],
-            'local_studentrecords_txn' => ['reverses', 'chargeid', 'aidid'],
+            'local_studentrecords_txn' => ['reverses', 'chargeid', 'aidid', 'paymentid'],
         ];
         foreach ($indexes as $tablename => $fields) {
             $table = new xmldb_table($tablename);
@@ -356,6 +356,10 @@ function xmldb_local_studentrecords_upgrade($oldversion) {
                     $dbman->add_index($table, $index);
                 }
             }
+        }
+        // The recovery of lost online payments starts now: it must never read a site's earlier payments as lost.
+        if (!get_config('local_studentrecords', 'recoverfrom')) {
+            set_config('recoverfrom', time(), 'local_studentrecords');
         }
         upgrade_plugin_savepoint(true, 2026111607, 'local', 'studentrecords');
     }

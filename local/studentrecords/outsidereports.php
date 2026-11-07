@@ -3,7 +3,8 @@
 /**
  * Outside reports (records staff): saved exports for a state agency, an accreditor or others (setup staff change them),
  * headcount and completions counts by IPEDS race/ethnicity and sex, and the National Student Clearinghouse enrollment file
- * (a starting file: check it against the Clearinghouse's current specification). Every download is logged.
+ * (a starting file: check it against the Clearinghouse's current specification). Every download is logged. Anything that
+ * shows race, ethnicity or sex needs the view demographics capability.
  *
  * @package    local_studentrecords
  * @copyright  2026 Clouve Inc.
@@ -43,7 +44,6 @@ $tabs = fn() => [new tabobject('exports', new moodle_url($base, ['tab' => 'expor
 $send = function (string $name, array $head, array $rows, string $info) use ($download) {
     audit::log('export', 'outside', null, null, $info . ' ' . $download . ' ' . count($rows));
     reports::download(clean_filename($name . '_' . date('Ymd')), $download, $head, $rows);
-    die();
 };
 
 if (optional_param('starters', 0, PARAM_BOOL) && $configure) {
@@ -78,7 +78,7 @@ if ($exportid >= 0) {
     echo $OUTPUT->heading(get_string($export ? 'editexport' : 'addexport', $p));
     $form->display();
     echo $OUTPUT->footer();
-    die();
+    return;
 }
 
 if ($run) {
@@ -89,6 +89,7 @@ if ($run) {
     $result = outside::run($export);
     if ($download !== '') {
         $send('outside_' . $export->name, $result['head'], $result['rows'], 'export ' . $export->id);
+        return;
     }
     echo staffarea::header();
     echo $OUTPUT->heading(format_string($export->name));
@@ -101,7 +102,7 @@ if ($run) {
     echo $OUTPUT->download_dataformat_selector(get_string('download'), $base->out_omit_querystring(), 'download', ['run' => $run]);
     echo html_writer::link($base, get_string('back'));
     echo $OUTPUT->footer();
-    die();
+    return;
 }
 
 if ($tab === 'counts') {
@@ -110,7 +111,13 @@ if ($tab === 'counts') {
     $fromt = make_timestamp($fy, $fm, $fd, 0, 0, 0, catalog::timezone());
     $tot = make_timestamp($ty, $tm, $td, 0, 0, 0, catalog::timezone());
     $kind = optional_param('kind', 'headcount', PARAM_ALPHA) === 'completions' ? 'completions' : 'headcount';
-    $grid = $kind === 'headcount' ? outside::headcount($fromt, $tot) : outside::completions($fromt, $tot);
+    $part = optional_param('part', '', PARAM_ALPHA);
+    if ($download !== '' && outside::counts_show_demographics($kind, $part)) {
+        require_capability('local/studentrecords:viewdemographics', $syscontext);
+    }
+    $viewdemographics = has_capability('local/studentrecords:viewdemographics', $syscontext);
+    $done = $kind === 'completions' ? outside::completions($fromt, $tot) : null;
+    $grid = !$viewdemographics ? [] : ($done ? $done['grid'] : outside::headcount($fromt, $tot));
     $sexes = ['female', 'male', 'another', 'notreported'];
     $head = [get_string('level', $p), get_string('ipedscategory', $p)];
     foreach ($sexes as $sx) {
@@ -118,7 +125,7 @@ if ($tab === 'counts') {
     }
     $head[] = get_string('total');
     $rows = [];
-    foreach (($kind === 'headcount' ? $grid : $grid['grid']) as $level => $cats) {
+    foreach ($grid as $level => $cats) {
         foreach ($cats as $cat => $bysex) {
             $row = [$level !== '' ? $level : '-', get_string('ipeds_' . $cat, $p)];
             foreach ($sexes as $sx) {
@@ -131,13 +138,15 @@ if ($tab === 'counts') {
     if ($kind === 'completions') {
         $phead = [get_string('programcode', $p), get_string('programname', $p), get_string('xf_cipcode', $p),
             get_string('xf_credential', $p), get_string('count', $p)];
-        $prows = array_map(fn($r) => [$r['code'], $r['name'], $r['cip'], $r['credential'], $r['count']], $grid['programs']);
+        $prows = array_map(fn($r) => [$r['code'], $r['name'], $r['cip'], $r['credential'], $r['count']], $done['programs']);
     }
     if ($download !== '') {
-        if ($kind === 'completions' && optional_param('part', '', PARAM_ALPHA) === 'programs') {
+        if (!outside::counts_show_demographics($kind, $part)) {
             $send('completions_programs', $phead, $prows, 'completions programs ' . $from . ' ' . $to);
+            return;
         }
         $send($kind, $head, $rows, $kind . ' ' . $from . ' ' . $to);
+        return;
     }
     echo staffarea::header();
     echo $OUTPUT->tabtree($tabs(), 'counts');
@@ -172,19 +181,28 @@ if ($tab === 'counts') {
             $params + ['part' => 'programs']
         );
     }
-    $t = new html_table();
-    $t->head = $head;
-    $t->data = array_map(fn($r) => array_map(fn($v) => s((string)$v), $r), $rows);
-    echo $rows ? html_writer::table($t) : $OUTPUT->notification(get_string('nothingtoreport', $p), 'info');
-    echo $OUTPUT->download_dataformat_selector(get_string('download'), $base->out_omit_querystring(), 'download', $params);
+    if ($viewdemographics) {
+        $t = new html_table();
+        $t->head = $head;
+        $t->data = array_map(fn($r) => array_map(fn($v) => s((string)$v), $r), $rows);
+        echo $rows ? html_writer::table($t) : $OUTPUT->notification(get_string('nothingtoreport', $p), 'info');
+        echo $OUTPUT->download_dataformat_selector(get_string('download'), $base->out_omit_querystring(), 'download', $params);
+    } else {
+        echo html_writer::div(get_string(
+            'rep_needsdemographics',
+            $p,
+            get_string('studentrecords:viewdemographics', $p)
+        ), 'sr-note sr-note-warn');
+    }
     echo $OUTPUT->footer();
-    die();
+    return;
 }
 
 if ($tab === 'nsc') {
     $rows = $termid ? outside::nsc_rows($termid) : [];
     if ($download !== '' && $termid) {
         $send('clearinghouse_' . ($terms[$termid] ?? $termid), outside::nsc_head(), $rows, 'clearinghouse term ' . $termid);
+        return;
     }
     echo staffarea::header();
     echo $OUTPUT->tabtree($tabs(), 'nsc');
@@ -223,7 +241,7 @@ if ($tab === 'nsc') {
         );
     }
     echo $OUTPUT->footer();
-    die();
+    return;
 }
 
 echo staffarea::header();

@@ -210,7 +210,7 @@ class cards {
             return '';
         }
         return html_writer::link(
-            new \moodle_url('/local/academictranscript/index.php'),
+            new \moodle_url('/local/academictranscript/index.php', ['view' => 'mine']),
             get_string('nav_mytranscript', self::P),
             ['class' => 'btn btn-outline-secondary']
         );

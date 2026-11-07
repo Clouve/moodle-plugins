@@ -675,4 +675,62 @@ final class aidhelp_test extends \advanced_testcase {
         $this->assertSame(0.0, $w['couldhave']);
         $this->assertSame(1000.0, $w['paid']);
     }
+
+    /**
+     * The notice after sending an award letter says what really happened to the message. Only a message that went to the student
+     * is called sent. The audit log says the same.
+     *
+     * @dataProvider award_letter_provider
+     * @param array $settings
+     * @param array $user fields of the student's account
+     * @param bool $intransaction the message is written during other work
+     * @param string $status what the message log says
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('award_letter_provider')]
+    public function test_send_letter_says_what_happened(array $settings, array $user, bool $intransaction, string $status): void {
+        global $CFG, $DB;
+        $this->preventResetByRollback();
+        $this->redirectEmails();
+        unset($CFG->noemailever);
+        $this->generator->set_settings($settings);
+        $student = $this->generator->create_user_student(['email' => 'real.person@example.net']);
+        if ($user) {
+            $DB->update_record('user', (object)(['id' => $student->userid] + $user));
+        }
+        $p = 'local_studentrecords';
+
+        $transaction = $intransaction ? $DB->start_delegated_transaction() : null;
+        [$text, $type] = aidhelp::send_letter($student, '2029-30');
+        if ($transaction) {
+            $transaction->allow_commit();
+        }
+        $this->resetDebugging();
+
+        if ($status === 'sent') {
+            $this->assertSame(get_string('aid_lettersent', $p), $text);
+            $this->assertSame(\core\output\notification::NOTIFY_SUCCESS, $type);
+        } else {
+            $this->assertSame(get_string('aid_letternotsent', $p, get_string('msgstatus_' . $status, $p)), $text);
+            $this->assertSame(\core\output\notification::NOTIFY_WARNING, $type);
+        }
+        $this->assertTrue($DB->record_exists('local_studentrecords_log', ['objecttype' => 'aid', 'objectid' => $student->id,
+            'info' => 'award letter 2029-30: ' . $status]));
+    }
+
+    /**
+     * Data for test_send_letter_says_what_happened.
+     *
+     * @return array
+     */
+    public static function award_letter_provider(): array {
+        return [
+            'sent' => [[], [], false, 'sent'],
+            'waits for cron' => [[], [], true, 'queued'],
+            'switched off' => [['msgon_aidletter' => 0], [], false, 'off'],
+            'no account in use' => [[], ['suspended' => 1], false, 'nouser'],
+            'test mode' => [['msgtestmode' => 1], [], false, 'testmode'],
+            'test inbox' => [['msgtestmode' => 1, 'msgtestinbox' => 'inbox@example.org'], [], false, 'testinbox'],
+            'failed' => [[], ['email' => ''], false, 'failed'],
+        ];
+    }
 }

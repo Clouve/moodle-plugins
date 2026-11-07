@@ -2,6 +2,8 @@
 
 namespace local_academictranscript\local;
 
+use local_academictranscript\tests\recording_lock_factory;
+
 #[\PHPUnit\Framework\Attributes\CoversClass(requests::class)]
 /**
  * Tests for Official transcript requests, on their own and with Student Records.
@@ -102,6 +104,7 @@ final class requests_test extends \advanced_testcase {
         $this->setAdminUser();
 
         $first = requests::issue($id);
+        $this->a_minute_passes($id);
         $second = requests::issue($id, true);
 
         $this->assertSame('Admissions Office <office@example.com>', $first->recipient);
@@ -113,7 +116,8 @@ final class requests_test extends \advanced_testcase {
     }
 
     /**
-     * A second click on Issue is refused, so it can't make a second transcript. Reissue is a separate action.
+     * A second click on Issue is refused, so it can't make a second transcript, and the message says what happened. Reissue
+     * is a separate action, and it still makes a new copy.
      */
     public function test_a_double_click_on_issue_issues_once(): void {
         global $DB;
@@ -124,8 +128,302 @@ final class requests_test extends \advanced_testcase {
 
         requests::issue($id);
 
-        $this->assert_refused('req_err_notready', fn() => requests::issue($id));
+        $this->assert_refused('req_err_issued', fn() => requests::issue($id));
         $this->assertSame(1, $DB->count_records('local_academictranscript_issue', ['userid' => $student->id]));
+
+        $this->a_minute_passes($id);
+        requests::issue($id, true);
+        $this->assertSame(2, $DB->count_records('local_academictranscript_issue', ['userid' => $student->id]));
+    }
+
+    /**
+     * Two clicks on Issue at the same moment, or two registrars: the second waits for the lock, finds the request issued and
+     * makes nothing.
+     */
+    public function test_an_issue_that_waited_for_the_lock_finds_it_issued(): void {
+        global $CFG, $DB;
+        $student = $this->getDataGenerator()->create_user();
+        $this->setUser($student);
+        $id = requests::create($student->id, ['delivery' => 'pickup', 'recipient' => 'Me', 'timing' => 'now']);
+        $this->setAdminUser();
+        $this->use_recording_locks();
+        recording_lock_factory::$first = fn() => requests::issue($id);
+
+        $this->assert_refused('req_err_issued', fn() => requests::issue($id));
+
+        unset($CFG->lock_factory);
+        $this->assertFalse($DB->is_transaction_started());
+        $this->assertSame(1, $DB->count_records('local_academictranscript_issue', ['userid' => $student->id]));
+        $this->assertSame('issued', $DB->get_field(requests::TABLE, 'status', ['id' => $id]));
+    }
+
+    /**
+     * The lock on the request is taken before the transaction starts and released after it commits, also when issuing fails.
+     */
+    public function test_issue_holds_the_lock_past_the_commit(): void {
+        global $CFG;
+        $student = $this->getDataGenerator()->create_user();
+        $this->setUser($student);
+        $id = requests::create($student->id, ['delivery' => 'pickup', 'recipient' => 'Me', 'timing' => 'now']);
+        $this->setAdminUser();
+        $this->use_recording_locks();
+
+        requests::issue($id);
+        $this->assert_refused('req_err_issued', fn() => requests::issue($id));
+
+        unset($CFG->lock_factory);
+        $once = [['get', 'issue' . $id, false], ['release', 'issue' . $id, false]];
+        $this->assertSame(array_merge($once, $once), $this->locks_on('issue'));
+    }
+
+    /**
+     * Without the lock nothing is issued, and the request stays as it was.
+     */
+    public function test_issue_makes_nothing_without_the_lock(): void {
+        global $CFG, $DB;
+        require_once(__DIR__ . '/../fixtures/refusing_lock_factory.php');
+        $student = $this->getDataGenerator()->create_user();
+        $this->setUser($student);
+        $id = requests::create($student->id, ['delivery' => 'pickup', 'recipient' => 'Me', 'timing' => 'now']);
+        $this->setAdminUser();
+
+        $CFG->lock_factory = '\\local_academictranscript\\tests\\refusing_lock_factory';
+        $this->assert_refused('req_err_busy', fn() => requests::issue($id));
+        unset($CFG->lock_factory);
+
+        $this->assertSame(0, $DB->count_records('local_academictranscript_issue'));
+        $this->assertSame('pending', $DB->get_field(requests::TABLE, 'status', ['id' => $id]));
+    }
+
+    /**
+     * A double click on Reissue makes one copy, and the second click is told why. Reissue a minute later makes a new copy.
+     */
+    public function test_a_double_click_on_reissue_makes_one_copy(): void {
+        global $DB;
+        $student = $this->getDataGenerator()->create_user();
+        $this->setUser($student);
+        $id = requests::create($student->id, ['delivery' => 'pickup', 'recipient' => 'Me', 'timing' => 'now']);
+        $this->setAdminUser();
+        requests::issue($id);
+        $this->a_minute_passes($id);
+
+        $copy = requests::issue($id, true);
+        $this->assert_refused('req_err_justissued', fn() => requests::issue($id, true));
+
+        $this->assertSame(2, $DB->count_records('local_academictranscript_issue', ['userid' => $student->id]));
+        $this->assertEquals($copy->id, $DB->get_field(requests::TABLE, 'issueid', ['id' => $id]));
+
+        $this->a_minute_passes($id);
+        $later = requests::issue($id, true);
+        $this->assertSame(3, $DB->count_records('local_academictranscript_issue', ['userid' => $student->id]));
+        $this->assertEquals($later->id, $DB->get_field(requests::TABLE, 'issueid', ['id' => $id]));
+    }
+
+    /**
+     * Two clicks on Reissue at the same moment, or two registrars: the second waits for the lock, finds the new copy and makes
+     * nothing. Looking before the wait would find the old copy, which is how two copies get made.
+     */
+    public function test_a_reissue_that_waited_for_the_lock_finds_the_new_copy(): void {
+        global $CFG, $DB;
+        $student = $this->getDataGenerator()->create_user();
+        $this->setUser($student);
+        $id = requests::create($student->id, ['delivery' => 'pickup', 'recipient' => 'Me', 'timing' => 'now']);
+        $this->setAdminUser();
+        requests::issue($id);
+        $this->a_minute_passes($id);
+        $this->use_recording_locks();
+        recording_lock_factory::$first = fn() => requests::issue($id, true);
+
+        $this->assert_refused('req_err_justissued', fn() => requests::issue($id, true));
+
+        unset($CFG->lock_factory);
+        $this->assertFalse($DB->is_transaction_started());
+        $this->assertSame(2, $DB->count_records('local_academictranscript_issue', ['userid' => $student->id]));
+    }
+
+    /**
+     * The same recipient twice in a moment on the student's page is one Official transcript, and the second click gets that
+     * copy back, so the page can offer it.
+     */
+    public function test_the_same_direct_issue_twice_makes_one_copy(): void {
+        global $DB;
+        $student = $this->getDataGenerator()->create_user();
+        $this->setAdminUser();
+
+        $first = requests::issue_direct($student->id, ' Valley College ', $repeated);
+        $this->assertFalse($repeated);
+        $second = requests::issue_direct($student->id, 'Valley College', $repeated);
+
+        $this->assertTrue($repeated);
+        $this->assertEquals($first->id, $second->id);
+        $this->assertSame($first->verifycode, $second->verifycode);
+        $this->assertSame($first->transcriptno, $second->transcriptno);
+        $this->assertSame(1, $DB->count_records('local_academictranscript_issue', ['userid' => $student->id]));
+    }
+
+    /**
+     * Both clicks on the student's page run at the same moment: the second waits for the lock, then finds the first copy.
+     */
+    public function test_a_direct_issue_that_waited_for_the_lock_finds_the_first_copy(): void {
+        global $CFG, $DB;
+        $student = $this->getDataGenerator()->create_user();
+        $this->setAdminUser();
+        $this->use_recording_locks();
+        $first = null;
+        recording_lock_factory::$first = function () use ($student, &$first) {
+            $first = requests::issue_direct($student->id, 'Valley College');
+        };
+
+        $second = requests::issue_direct($student->id, 'Valley College', $repeated);
+
+        unset($CFG->lock_factory);
+        $this->assertTrue($repeated);
+        $this->assertEquals($first->id, $second->id);
+        $this->assertSame(1, $DB->count_records('local_academictranscript_issue', ['userid' => $student->id]));
+    }
+
+    /**
+     * The lock on the student is taken before the transaction starts and released after it commits.
+     */
+    public function test_direct_issue_holds_the_lock_past_the_commit(): void {
+        global $CFG;
+        $student = $this->getDataGenerator()->create_user();
+        $this->setAdminUser();
+        $this->use_recording_locks();
+
+        requests::issue_direct($student->id, 'Valley College');
+        requests::issue_direct($student->id, 'Valley College');
+
+        unset($CFG->lock_factory);
+        $once = [['get', 'direct' . $student->id, false], ['release', 'direct' . $student->id, false]];
+        $this->assertSame(array_merge($once, $once), $this->locks_on('direct'));
+    }
+
+    /**
+     * Without the lock nothing is issued.
+     */
+    public function test_direct_issue_makes_nothing_without_the_lock(): void {
+        global $CFG, $DB;
+        require_once(__DIR__ . '/../fixtures/refusing_lock_factory.php');
+        $student = $this->getDataGenerator()->create_user();
+        $this->setAdminUser();
+
+        $CFG->lock_factory = '\\local_academictranscript\\tests\\refusing_lock_factory';
+        $this->assert_refused('req_err_busy', fn() => requests::issue_direct($student->id, 'Valley College'));
+        unset($CFG->lock_factory);
+
+        $this->assertSame(0, $DB->count_records('local_academictranscript_issue'));
+    }
+
+    /**
+     * Another recipient is a transcript of its own, however quick, and so is the same recipient for another student.
+     */
+    public function test_a_direct_issue_for_someone_else_makes_a_copy(): void {
+        global $DB;
+        $student = $this->getDataGenerator()->create_user();
+        $other = $this->getDataGenerator()->create_user();
+        $this->setAdminUser();
+
+        requests::issue_direct($student->id, 'Valley College');
+        requests::issue_direct($student->id, 'Hill College', $repeated);
+        $this->assertFalse($repeated);
+        requests::issue_direct($other->id, 'Valley College', $repeated);
+        $this->assertFalse($repeated);
+
+        $this->assertSame(2, $DB->count_records('local_academictranscript_issue', ['userid' => $student->id]));
+        $this->assertSame(1, $DB->count_records('local_academictranscript_issue', ['userid' => $other->id]));
+    }
+
+    /**
+     * The same recipient again later, on purpose, is a new Official transcript with a new code.
+     */
+    public function test_the_same_direct_issue_again_later_makes_a_copy(): void {
+        global $DB;
+        $student = $this->getDataGenerator()->create_user();
+        $this->setAdminUser();
+        $first = requests::issue_direct($student->id, 'Valley College');
+        $DB->set_field('local_academictranscript_issue', 'timecreated', time() - requests::REPEATWINDOW - 1, ['id' => $first->id]);
+
+        $second = requests::issue_direct($student->id, 'Valley College', $repeated);
+
+        $this->assertFalse($repeated);
+        $this->assertNotSame($first->verifycode, $second->verifycode);
+        $this->assertSame(2, $DB->count_records('local_academictranscript_issue', ['userid' => $student->id]));
+    }
+
+    /**
+     * Cancel takes the lock Issue takes, so the two run one after the other.
+     */
+    public function test_cancel_takes_the_lock_of_the_request(): void {
+        global $CFG;
+        $student = $this->getDataGenerator()->create_user();
+        $this->setUser($student);
+        $id = requests::create($student->id, ['delivery' => 'pickup', 'recipient' => 'Me', 'timing' => 'now']);
+        $this->setAdminUser();
+        $this->use_recording_locks();
+
+        requests::cancel($id, '');
+
+        unset($CFG->lock_factory);
+        $this->assertSame([['get', 'issue' . $id, false], ['release', 'issue' . $id, false]], $this->locks_on('issue'));
+    }
+
+    /**
+     * Issue gets there first: the Cancel that waited says the request is issued, and changes nothing.
+     */
+    public function test_a_cancel_that_waited_for_the_lock_finds_it_issued(): void {
+        global $CFG, $DB;
+        $student = $this->getDataGenerator()->create_user();
+        $this->setUser($student);
+        $id = requests::create($student->id, ['delivery' => 'pickup', 'recipient' => 'Me', 'timing' => 'now']);
+        $this->setAdminUser();
+        $this->use_recording_locks();
+        recording_lock_factory::$first = fn() => requests::issue($id);
+
+        $this->assert_refused('req_err_notcancelled', fn() => requests::cancel($id, 'Asked by phone'));
+
+        unset($CFG->lock_factory);
+        $row = $DB->get_record(requests::TABLE, ['id' => $id]);
+        $this->assertSame('issued', $row->status);
+        $this->assertNull($row->note);
+        $this->assertFalse($DB->record_exists('local_academictranscript_log', ['action' => 'request_cancelled']));
+    }
+
+    /**
+     * Cancel gets there first: the Issue that waited says the request is cancelled, and makes nothing.
+     */
+    public function test_an_issue_that_waited_for_the_lock_finds_it_cancelled(): void {
+        global $CFG, $DB;
+        $student = $this->getDataGenerator()->create_user();
+        $this->setUser($student);
+        $id = requests::create($student->id, ['delivery' => 'pickup', 'recipient' => 'Me', 'timing' => 'now']);
+        $this->setAdminUser();
+        $this->use_recording_locks();
+        recording_lock_factory::$first = fn() => requests::cancel($id, 'Asked by phone');
+
+        $this->assert_refused('req_err_cancelled', fn() => requests::issue($id));
+
+        unset($CFG->lock_factory);
+        $this->assertSame('cancelled', $DB->get_field(requests::TABLE, 'status', ['id' => $id]));
+        $this->assertSame(0, $DB->count_records('local_academictranscript_issue'));
+    }
+
+    /**
+     * Without the lock nothing is cancelled.
+     */
+    public function test_cancel_changes_nothing_without_the_lock(): void {
+        global $CFG, $DB;
+        require_once(__DIR__ . '/../fixtures/refusing_lock_factory.php');
+        $student = $this->getDataGenerator()->create_user();
+        $this->setUser($student);
+        $id = requests::create($student->id, ['delivery' => 'pickup', 'recipient' => 'Me', 'timing' => 'now']);
+        $this->setAdminUser();
+
+        $CFG->lock_factory = '\\local_academictranscript\\tests\\refusing_lock_factory';
+        $this->assert_refused('req_err_busy', fn() => requests::cancel($id, ''));
+        unset($CFG->lock_factory);
+
+        $this->assertSame('pending', $DB->get_field(requests::TABLE, 'status', ['id' => $id]));
     }
 
     /**
@@ -186,7 +484,7 @@ final class requests_test extends \advanced_testcase {
 
         requests::cancel($id, 'Asked by phone');
 
-        $this->assert_refused('req_err_notready', fn() => requests::issue($id));
+        $this->assert_refused('req_err_cancelled', fn() => requests::issue($id));
         $this->assert_refused('req_err_notpending', fn() => requests::cancel($id, 'Again'));
     }
 
@@ -218,6 +516,216 @@ final class requests_test extends \advanced_testcase {
     }
 
     /**
+     * A double click sends the form twice. That is one request and one fee, and the second click is told so.
+     */
+    public function test_the_same_request_twice_in_a_moment_is_one_request(): void {
+        global $DB;
+        [$user, $student, $sr] = $this->student_records_student();
+        $sr->set_settings(['billing' => 1]);
+        $this->setUser($user);
+        $data = ['delivery' => 'mail', 'recipient' => ' Office ', 'address' => "1 Way\nSpringfield", 'timing' => 'now'];
+
+        $first = requests::create($user->id, $data, $repeated);
+        $this->assertFalse($repeated);
+        $second = requests::create($user->id, $data, $repeated);
+
+        $this->assertTrue($repeated);
+        $this->assertSame($first, $second);
+        $this->assertSame(1, $DB->count_records(requests::TABLE));
+        $this->assertSame(1, $DB->count_records('local_studentrecords_txn', ['studentid' => $student->id]));
+        $this->assertSame(10.0, \local_studentrecords\local\billing::balance((int)$student->id));
+        $this->assertSame(1, $DB->count_records('local_academictranscript_log', ['action' => 'request']));
+    }
+
+    /**
+     * Academic Transcript works on its own too: without Student Records a double click still makes one request.
+     */
+    public function test_the_same_request_twice_without_student_records(): void {
+        global $DB;
+        $student = $this->getDataGenerator()->create_user();
+        $this->setUser($student);
+        $data = ['delivery' => 'email', 'recipient' => 'Office', 'email' => 'office@example.com', 'timing' => 'now'];
+
+        $first = requests::create($student->id, $data);
+        $second = requests::create($student->id, $data);
+
+        $this->assertSame($first, $second);
+        $this->assertSame(1, $DB->count_records(requests::TABLE));
+    }
+
+    /**
+     * Both clicks run at the same moment: the second waits for the lock, then finds the first one's request. Looking before
+     * the wait would find nothing, which is how two fees get on the account.
+     */
+    public function test_a_request_that_waited_for_the_lock_finds_the_first_one(): void {
+        global $CFG, $DB;
+        [$user, $student, $sr] = $this->student_records_student();
+        $sr->set_settings(['billing' => 1]);
+        $this->setUser($user);
+        $data = ['delivery' => 'pickup', 'recipient' => 'Me', 'timing' => 'now'];
+        $this->use_recording_locks();
+        $first = 0;
+        recording_lock_factory::$first = function () use ($user, $data, &$first) {
+            $first = requests::create($user->id, $data);
+        };
+
+        $second = requests::create($user->id, $data, $repeated);
+
+        unset($CFG->lock_factory);
+        $this->assertTrue($repeated);
+        $this->assertSame($first, $second);
+        $this->assertSame(1, $DB->count_records(requests::TABLE));
+        $this->assertSame(10.0, \local_studentrecords\local\billing::balance((int)$student->id));
+    }
+
+    /**
+     * The lock on the student is taken before the transaction starts and released after it commits, so the second click
+     * always finds what the first one saved. It also ends when the request is the same one again.
+     */
+    public function test_create_holds_the_lock_past_the_commit(): void {
+        global $CFG;
+        $student = $this->getDataGenerator()->create_user();
+        $this->setUser($student);
+        $this->use_recording_locks();
+        $data = ['delivery' => 'pickup', 'recipient' => 'Me', 'timing' => 'now'];
+
+        requests::create($student->id, $data);
+        requests::create($student->id, $data);
+
+        unset($CFG->lock_factory);
+        $once = [['get', 'request' . $student->id, false], ['release', 'request' . $student->id, false]];
+        $this->assertSame(array_merge($once, $once), $this->locks_on('request'));
+    }
+
+    /**
+     * Without the lock nothing is saved and no fee goes on the account. The student is told to look again.
+     */
+    public function test_create_saves_nothing_without_the_lock(): void {
+        global $CFG, $DB;
+        require_once(__DIR__ . '/../fixtures/refusing_lock_factory.php');
+        [$user, $student, $sr] = $this->student_records_student();
+        $sr->set_settings(['billing' => 1]);
+        $this->setUser($user);
+
+        $CFG->lock_factory = '\\local_academictranscript\\tests\\refusing_lock_factory';
+        $this->assert_refused('req_err_busy', fn() => requests::create($user->id, ['delivery' => 'pickup',
+            'recipient' => 'Me', 'timing' => 'now']));
+        unset($CFG->lock_factory);
+
+        $this->assertSame(0, $DB->count_records(requests::TABLE));
+        $this->assertSame(0.0, \local_studentrecords\local\billing::balance((int)$student->id));
+    }
+
+    /**
+     * A second request that differs in anything the student typed or chose is a request of its own, however quick, and it
+     * has its own fee.
+     *
+     * @dataProvider different_request_provider
+     * @param array $first The first request
+     * @param array $second The second request
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('different_request_provider')]
+    public function test_a_different_request_is_a_new_request(array $first, array $second): void {
+        global $DB;
+        $student = $this->getDataGenerator()->create_user();
+        $this->setUser($student);
+
+        $one = requests::create($student->id, $first);
+        $two = requests::create($student->id, $second, $repeated);
+
+        $this->assertFalse($repeated);
+        $this->assertNotSame($one, $two);
+        $this->assertSame(2, $DB->count_records(requests::TABLE));
+    }
+
+    /**
+     * Data for test_a_different_request_is_a_new_request.
+     *
+     * @return array
+     */
+    public static function different_request_provider(): array {
+        $mail = ['delivery' => 'mail', 'recipient' => 'Office', 'address' => '1 Way', 'timing' => 'now'];
+        $email = ['delivery' => 'email', 'recipient' => 'Office', 'email' => 'office@example.com', 'timing' => 'now'];
+        return [
+            'another recipient' => [$mail, ['recipient' => 'Dean'] + $mail],
+            'another address' => [$mail, ['address' => '2 Way'] + $mail],
+            'another email' => [$email, ['email' => 'dean@example.com'] + $email],
+            'another delivery' => [$mail, $email],
+            'another time' => [$mail, ['timing' => 'degree'] + $mail],
+        ];
+    }
+
+    /**
+     * The same request again later, on purpose, is a new request with a new fee.
+     */
+    public function test_the_same_request_again_later_is_a_new_request(): void {
+        global $DB;
+        [$user, $student, $sr] = $this->student_records_student();
+        $sr->set_settings(['billing' => 1]);
+        $this->setUser($user);
+        $data = ['delivery' => 'pickup', 'recipient' => 'Me', 'timing' => 'now'];
+        $first = requests::create($user->id, $data);
+        $DB->set_field(requests::TABLE, 'timecreated', time() - requests::REPEATWINDOW - 1, ['id' => $first]);
+
+        $second = requests::create($user->id, $data, $repeated);
+
+        $this->assertFalse($repeated);
+        $this->assertNotSame($first, $second);
+        $this->assertSame(20.0, \local_studentrecords\local\billing::balance((int)$student->id));
+    }
+
+    /**
+     * A request the registrar has already acted on isn't a click still on its way. Asking again right after it is new.
+     *
+     * @dataProvider acted_on_provider
+     * @param string $action Issue or cancel
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('acted_on_provider')]
+    public function test_the_same_request_after_it_was_acted_on_is_a_new_request(string $action): void {
+        global $DB;
+        $student = $this->getDataGenerator()->create_user();
+        $this->setUser($student);
+        $data = ['delivery' => 'pickup', 'recipient' => 'Me', 'timing' => 'now'];
+        $first = requests::create($student->id, $data);
+        $this->setAdminUser();
+        $action === 'issue' ? requests::issue($first) : requests::cancel($first, '');
+        $this->setUser($student);
+
+        $second = requests::create($student->id, $data, $repeated);
+
+        $this->assertFalse($repeated);
+        $this->assertNotSame($first, $second);
+        $this->assertSame('pending', $DB->get_field(requests::TABLE, 'status', ['id' => $second]));
+    }
+
+    /**
+     * Data for test_the_same_request_after_it_was_acted_on_is_a_new_request.
+     *
+     * @return array
+     */
+    public static function acted_on_provider(): array {
+        return ['issued' => ['issue'], 'cancelled' => ['cancel']];
+    }
+
+    /**
+     * Two students who send the same thing at the same moment each have a request.
+     */
+    public function test_two_students_can_make_the_same_request(): void {
+        global $DB;
+        $data = ['delivery' => 'pickup', 'recipient' => 'Myself', 'timing' => 'now'];
+        $one = $this->getDataGenerator()->create_user();
+        $two = $this->getDataGenerator()->create_user();
+
+        $this->setUser($one);
+        requests::create($one->id, $data);
+        $this->setUser($two);
+        requests::create($two->id, $data, $repeated);
+
+        $this->assertFalse($repeated);
+        $this->assertSame(2, $DB->count_records(requests::TABLE));
+    }
+
+    /**
      * With billing off, or a fee of nothing, no line goes on the account and the request doesn't claim one.
      */
     public function test_no_charge_with_billing_off_or_no_fee(): void {
@@ -228,7 +736,7 @@ final class requests_test extends \advanced_testcase {
         $off = requests::create($user->id, ['delivery' => 'pickup', 'recipient' => 'Me', 'timing' => 'now']);
         $sr->set_settings(['billing' => 1]);
         set_config('fee_pickup', '0', 'local_academictranscript');
-        $free = requests::create($user->id, ['delivery' => 'pickup', 'recipient' => 'Me', 'timing' => 'now']);
+        $free = requests::create($user->id, ['delivery' => 'pickup', 'recipient' => 'My employer', 'timing' => 'now']);
 
         $this->assertEquals(0, $DB->get_field(requests::TABLE, 'charged', ['id' => $off]));
         $this->assertEquals(0, $DB->get_field(requests::TABLE, 'charged', ['id' => $free]));
@@ -318,6 +826,37 @@ final class requests_test extends \advanced_testcase {
 
         $DB->set_field('local_studentrecords_student', 'status', 'graduated', ['id' => $student->id]);
         $this->assertSame('pending', requests::state(requests::for_user($user->id)[$id]));
+    }
+
+    /**
+     * Use the lock factory that writes down when a lock is taken and released, with real transactions.
+     */
+    private function use_recording_locks(): void {
+        global $CFG;
+        require_once(__DIR__ . '/../fixtures/recording_lock_factory.php');
+        $this->preventResetByRollback();
+        recording_lock_factory::reset();
+        $CFG->lock_factory = '\\local_academictranscript\\tests\\recording_lock_factory';
+    }
+
+    /**
+     * Make the last copy of a request a minute old, so that Reissue is a deliberate action again.
+     *
+     * @param int $id request id
+     */
+    private function a_minute_passes(int $id): void {
+        global $DB;
+        $DB->set_field(requests::TABLE, 'timeissued', time() - requests::REPEATWINDOW - 1, ['id' => $id]);
+    }
+
+    /**
+     * What was written down about the locks on one kind of thing.
+     *
+     * @param string $kind The start of the resource name
+     * @return array
+     */
+    private function locks_on(string $kind): array {
+        return array_values(array_filter(recording_lock_factory::$events, fn($e) => str_starts_with($e[1], $kind)));
     }
 
     /**

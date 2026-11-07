@@ -143,7 +143,8 @@ class request_view {
     }
 
     /**
-     * Script of the form: show the fields of the chosen delivery and its fee.
+     * Script of the form: show the fields of the chosen delivery and its fee, and take a second click off the button while the
+     * form is on its way. The server doesn't rely on that: see requests::create().
      *
      * @return string JavaScript
      */
@@ -165,6 +166,14 @@ class request_view {
                 };
                 form.addEventListener('change', show);
                 show();
+                const button = form.querySelector('button[type=submit]');
+                form.addEventListener('submit', function() {
+                    button.disabled = true;
+                });
+                // The Back button brings the form back as it was left.
+                window.addEventListener('pageshow', function() {
+                    button.disabled = false;
+                });
             })();
         ";
     }

@@ -11,6 +11,7 @@
 
 require_once(__DIR__ . '/../../config.php');
 
+use local_studentrecords\local\access;
 use local_studentrecords\local\admissions;
 use local_studentrecords\local\audit;
 use local_studentrecords\local\records;
@@ -37,6 +38,10 @@ if ($part === 'demog') {
 $student = students::get($id);
 $url = new moodle_url('/local/studentrecords/studentpart.php', array_filter(['id' => $id, 'part' => $part, 'item' => $item]));
 $back = new moodle_url('/local/studentrecords/student.php', ['id' => $id]);
+// Transfer credit and an admission decision decide a degree or a GPA, so another person enters them.
+if (in_array($part, ['xfer', 'decision'], true) && access::is_own($student)) {
+    throw new moodle_exception('err_ownrecord', $p, $back->out(false));
+}
 staffarea::start_page($url, 'students');
 $PAGE->navbar->add(get_string('studentrecords', $p), new moodle_url('/local/studentrecords/students.php'));
 $PAGE->navbar->add(students::display_name($student), $back);
@@ -101,7 +106,7 @@ if ($part === 'decision') {
     echo $OUTPUT->confirm(get_string('revokeconfirm', $p, s($rel->recipient)), new moodle_url($url, ['confirm' => 1,
         'sesskey' => sesskey()]), $back);
     echo $OUTPUT->footer();
-    die();
+    return;
 } else if ($part === 'gradapp') {
     $form = new \local_studentrecords\form\gradapp($url);
     $form->set_data($params);

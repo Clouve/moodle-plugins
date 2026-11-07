@@ -14,8 +14,8 @@
   </library>
   <library>
     <location>fonts</location>
-    <name>Source Sans 3 and Source Serif 4</name>
-    <description>Fonts embedded in transcript PDFs (converted to TCPDF format).</description>
+    <name>Clouve Sans and Clouve Serif</name>
+    <description>Fonts embedded in transcript PDFs. Modified versions of Source Sans 3 and Source Serif 4, renamed and converted to TCPDF format.</description>
     <license>OFL</license>
     <licenseversion>1.1</licenseversion>
     <version>3.052 / 4.004</version>

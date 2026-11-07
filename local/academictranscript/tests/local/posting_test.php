@@ -239,6 +239,25 @@ final class posting_test extends \advanced_testcase {
     }
 
     /**
+     * Without Student Records as the source there is no registration to lock, so posting asks for no lock at all.
+     */
+    public function test_post_without_student_records_needs_no_lock(): void {
+        global $CFG, $DB;
+        require_once(__DIR__ . '/../fixtures/refusing_lock_factory.php');
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_academictranscript');
+        ['user' => $user, 'course' => $course] = $this->make_student_course();
+        $generator->set_course_total($course->id, $user->id, 95);
+
+        $CFG->lock_factory = '\\local_academictranscript\\tests\\refusing_lock_factory';
+        $record = posting::post($course->id, $user->id);
+        unset($CFG->lock_factory);
+
+        $this->assertSame('A', $record->grade);
+        $this->assertNull($record->srregid);
+        $this->assertSame(1, $DB->count_records('local_academictranscript_posted'));
+    }
+
+    /**
      * A change to a posted grade is asked for with a reason and waits for approval. The new grade must be on the
      * scale, and only one request can wait at a time. Approving changes the grade and note and drops the stored
      * percentage, because the new letter was not decided by it.
@@ -273,6 +292,7 @@ final class posting_test extends \advanced_testcase {
         // Nothing changes until the request is decided.
         $this->assertSame('B', $DB->get_field('local_academictranscript_posted', 'grade', ['id' => $posted->id]));
 
+        $this->setUser($this->getDataGenerator()->create_user());
         posting::decide($changeid, true, 'ok');
 
         $now = $DB->get_record('local_academictranscript_posted', ['id' => $posted->id], '*', MUST_EXIST);
@@ -290,6 +310,91 @@ final class posting_test extends \advanced_testcase {
     }
 
     /**
+     * Nobody decides their own request and nobody decides on their own grade, to approve or to reject. The decision is
+     * refused with the reason, and the grade and the request stay as they were.
+     *
+     * @dataProvider own_decision_provider
+     * @param string $requester Who asked for the change: the student or a teacher
+     * @param string $decider Who tries to decide: the student or the teacher
+     * @param string $reason The language string id of the reason
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('own_decision_provider')]
+    public function test_nobody_decides_their_own_change(string $requester, string $decider, string $reason): void {
+        global $DB;
+        $posted = $this->make_posted_grade('C', 75.0);
+        $people = ['student' => $posted->userid, 'teacher' => $this->getDataGenerator()->create_user()->id];
+        $this->setUser($people[$requester]);
+        $changeid = posting::request_change($posted->id, 'A', 'note', 'reason');
+
+        $this->setUser($people[$decider]);
+        foreach ([true, false] as $approve) {
+            $error = $this->failure(fn() => posting::decide($changeid, $approve, 'ok'));
+            $this->assertSame($reason, $error->errorcode);
+        }
+
+        $this->assertSame('C', $DB->get_field('local_academictranscript_posted', 'grade', ['id' => $posted->id]));
+        $change = $DB->get_record('local_academictranscript_change', ['id' => $changeid], '*', MUST_EXIST);
+        $this->assertSame('pending', $change->status);
+        $this->assertNull($change->decidedby);
+        $this->assertFalse($DB->record_exists('local_academictranscript_log', ['action' => 'change_approve']));
+        $this->assertFalse($DB->record_exists('local_academictranscript_log', ['action' => 'change_reject']));
+    }
+
+    /**
+     * Data for test_nobody_decides_their_own_change.
+     *
+     * @return array
+     */
+    public static function own_decision_provider(): array {
+        return [
+            'the one who asked' => ['teacher', 'teacher', 'changeownrequest'],
+            'the student, on what a teacher asked' => ['teacher', 'student', 'changeownrecord'],
+            'the student, on what the student asked' => ['student', 'student', 'changeownrecord'],
+        ];
+    }
+
+    /**
+     * The check says why someone can't decide, and has nothing to say about anyone else.
+     */
+    public function test_decide_problem(): void {
+        $student = $this->getDataGenerator()->create_user();
+        $teacher = $this->getDataGenerator()->create_user();
+        $change = (object)['requestedby' => $teacher->id];
+
+        $this->setUser($teacher);
+        $this->assertSame('changeownrequest', posting::decide_problem($change, (int)$student->id));
+        $this->setUser($student);
+        $this->assertSame('changeownrecord', posting::decide_problem($change, (int)$student->id));
+        $this->setAdminUser();
+        $this->assertSame('', posting::decide_problem($change, (int)$student->id));
+    }
+
+    /**
+     * Nobody posts their own final grade: the row says why it can't post, and posting it is refused. Another student of the
+     * course still posts.
+     */
+    public function test_nobody_posts_their_own_grade(): void {
+        global $DB;
+        $generator = $this->getDataGenerator()->get_plugin_generator('local_academictranscript');
+        ['user' => $user, 'course' => $course] = $this->make_student_course();
+        $generator->set_course_total($course->id, $user->id, 95);
+        $other = $this->getDataGenerator()->create_user();
+        $this->getDataGenerator()->enrol_user($other->id, $course->id, 'student');
+        $generator->set_course_total($course->id, $other->id, 85);
+
+        $this->setUser($user);
+        $preview = posting::preview($course->id, $user->id);
+
+        $this->assertSame(get_string('ownposting', 'local_academictranscript'), $preview['error']);
+        $this->assertSame('', posting::preview($course->id, $other->id)['error']);
+        $this->assertSame('cannotpost', $this->failure(fn() => posting::post($course->id, $user->id))->errorcode);
+        $this->assertSame(0, $DB->count_records('local_academictranscript_posted'));
+
+        posting::post($course->id, $other->id);
+        $this->assertSame(1, $DB->count_records('local_academictranscript_posted', ['userid' => $other->id]));
+    }
+
+    /**
      * A rejected request leaves the posted grade, note and percentage as they were, and a new request can be made.
      */
     public function test_rejected_change_keeps_grade(): void {
@@ -298,6 +403,7 @@ final class posting_test extends \advanced_testcase {
         $posted = $this->make_posted_grade('B', 85.5);
         $changeid = posting::request_change($posted->id, 'A', 'note', 'reason');
 
+        $this->setUser($this->getDataGenerator()->create_user());
         posting::decide($changeid, false, 'not supported');
 
         $now = $DB->get_record('local_academictranscript_posted', ['id' => $posted->id], '*', MUST_EXIST);

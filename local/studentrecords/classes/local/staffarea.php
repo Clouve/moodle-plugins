@@ -57,6 +57,10 @@ class staffarea {
             // The federal aid module is off unless the school turns it on.
             return false;
         }
+        if ($name === 'gradechanges' && has_capability('local/studentrecords:approvegradechange', \context_system::instance())) {
+            // An approver who doesn't manage students opens it to decide requests, and sees only those.
+            return true;
+        }
         return has_capability(self::PAGES[$name][2], \context_system::instance());
     }
 

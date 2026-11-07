@@ -409,6 +409,17 @@ class outside {
         return $grid;
     }
 
+    /**
+     * Whether a part of the Counts tab shows race, ethnicity or sex. Only the list of completions by program doesn't.
+     *
+     * @param string $kind headcount or completions
+     * @param string $part programs for the list of completions by program, '' for the counts
+     * @return bool
+     */
+    public static function counts_show_demographics(string $kind, string $part): bool {
+        return $kind !== 'completions' || $part !== 'programs';
+    }
+
     // Clearinghouse.
 
     /**

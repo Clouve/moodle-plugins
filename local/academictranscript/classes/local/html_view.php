@@ -70,7 +70,7 @@ class html_view {
                 $group['rows'],
                 $data['unitshort'],
                 get_string('transferaccepted', 'local_academictranscript') . ' · ' .
-                get_string('earnedx', 'local_academictranscript', number_format($group['earned'], 1))
+                get_string('earnedx', 'local_academictranscript', scale::number($group['earned']))
             );
         }
         foreach ($data['terms'] as $term) {
@@ -81,8 +81,8 @@ class html_view {
                 $range,
                 $term['rows'],
                 $data['unitshort'],
-                get_string('termtotals', 'local_academictranscript', ['earned' => number_format($term['earned'], 1),
-                    'hours' => number_format($term['gpahours'], 1), 'qp' => number_format($term['qp'], 2)]) . ' · ' .
+                get_string('termtotals', 'local_academictranscript', ['earned' => scale::number($term['earned']),
+                    'hours' => scale::number($term['gpahours']), 'qp' => number_format($term['qp'], 2)]) . ' · ' .
                 get_string('termgpa', 'local_academictranscript', $term['gpa'] === '' ? '-' : $term['gpa'])
             );
         }
@@ -111,7 +111,7 @@ class html_view {
             foreach ($row['notes'] as $note) {
                 $title2 .= \html_writer::div(s($note), 'small fst-italic text-muted');
             }
-            $table->data[] = [s($row['code']), $title2, number_format($row['hours'], 1), s($row['grade']),
+            $table->data[] = [s($row['code']), $title2, scale::number($row['hours']), s($row['grade']),
                 $row['qp'] === null ? '-' : number_format($row['qp'], 2)];
         }
         return \html_writer::tag(
@@ -136,8 +136,8 @@ class html_view {
             get_string('gpa', 'local_academictranscript')];
         foreach (['institutional', 'transfer', 'overall'] as $key) {
             $v = $data['summary'][$key];
-            $table->data[] = [get_string('summary_' . $key, 'local_academictranscript'), number_format($v['earned'], 1),
-                number_format($v['gpahours'], 1), number_format($v['qp'], 2),
+            $table->data[] = [get_string('summary_' . $key, 'local_academictranscript'), scale::number($v['earned']),
+                scale::number($v['gpahours']), number_format($v['qp'], 2),
                 $key === 'transfer' || $v['gpa'] === '' ? '-' : $v['gpa']];
         }
         return \html_writer::tag('h5', $label, ['class' => 'mt-3'])
@@ -147,15 +147,16 @@ class html_view {
     /**
      * Grading scale and marks (the transcript key tables).
      *
+     * @param array|null $rows rows of the key, or null for this plugin's scale
      * @return string
      */
-    public static function scale_table(): string {
+    public static function scale_table(?array $rows = null): string {
         $html = '<table class="generaltable table-sm"><thead><tr>';
         foreach (['col_grade', 'col_pointsperunit', 'col_percentage', 'col_description'] as $key) {
             $html .= '<th>' . get_string($key, 'local_academictranscript') . '</th>';
         }
         $html .= '</tr></thead><tbody>';
-        $rows = scale::scale_rows();
+        $rows = $rows ?? scale::scale_rows();
         foreach ($rows as $row) {
             if ($row['ismark']) {
                 continue;

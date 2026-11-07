@@ -6,8 +6,10 @@ use local_studentrecords\local\audit;
 use local_studentrecords\local\drafts;
 use local_studentrecords\local\home;
 use local_studentrecords\local\importer;
+use local_studentrecords\local\plans;
 use local_studentrecords\local\records;
 use local_studentrecords\local\shell;
+use local_studentrecords\local\student_sections;
 use local_studentrecords\local\students;
 
 #[\PHPUnit\Framework\Attributes\CoversNothing]
@@ -192,6 +194,47 @@ final class records_pages_test extends \advanced_testcase {
         $this->setUser((int)$this->student->userid);
         $_GET['id'] = $this->student->id;
         $this->assertStringContainsString('N0012345678', $this->run_page('student.php'));
+    }
+
+    /**
+     * Every link to My transcript asks for that view. Staff with a student file would land on the staff view otherwise.
+     */
+    public function test_the_links_to_my_transcript_ask_for_that_view(): void {
+        if (\core_component::get_component_directory('local_academictranscript') === null) {
+            $this->markTestSkipped('Academic Transcript is not installed.');
+        }
+        $this->setUser((int)$this->student->userid);
+        shell::reset();
+        $link = 'href="' . (new \moodle_url('/local/academictranscript/index.php', ['view' => 'mine']))->out() . '"';
+
+        $this->assertSame('mine', shell::groups()[0]['items']['mytranscript'][0]->param('view'));
+        $this->assertStringContainsString($link, \local_studentrecords\local\homes::student());
+        $this->assertStringContainsString($link, \local_studentrecords\local\cards::transcript_link(false));
+        // The menu on the page has the same address, so this looks at the button of the record itself.
+        $_GET['id'] = $this->student->id;
+        $label = get_string('rec_transcriptlink', 'local_studentrecords');
+        $button = '~<a [^>]*' . preg_quote($link, '~') . '[^>]*>' . $label . '</a>~';
+        $this->assertMatchesRegularExpression($button, $this->run_page('student.php'));
+    }
+
+    /**
+     * A late payment hold on the Holds tab says what it is for and shows no amount: not everyone who reads a record sees the
+     * account.
+     */
+    public function test_holds_tab_shows_a_late_payment_without_the_amount(): void {
+        global $DB;
+        $sr = $this->getDataGenerator()->get_plugin_generator('local_studentrecords');
+        $sr->set_settings(['billing' => 1]);
+        $sr->create_charge(['studentid' => $this->student->id, 'amount' => 1000]);
+        $planid = plans::create($this->student, (int)$sr->create_term()->id, null, ['name' => 'Three payments',
+            'downtype' => 'percent', 'downvalue' => 25, 'numpay' => 3, 'frequency' => 'monthly', 'duemode' => 'relative',
+            'firstdue' => 30, 'planfee' => 0, 'latefee' => 0, 'gracedays' => 0], 'Custom');
+        $DB->set_field(plans::INSTS, 'duedate', time() - 10 * DAYSECS, ['stuplanid' => $planid, 'seq' => 0]);
+        plans::daily();
+
+        $html = student_sections::holds($this->student, false);
+
+        $this->assertMatchesRegularExpression('~<td[^>]*>Late payment on the plan [^<$]+</td>~', $html);
     }
 
     /**
@@ -454,6 +497,199 @@ final class records_pages_test extends \advanced_testcase {
 
         $this->assertStringNotContainsString($note, $html);
         $this->assertStringContainsString('run=' . $blocked . '"', $html);
+    }
+
+    /**
+     * The Calendar step of the setup wizard saves the at-risk percent, and 0 is a value like any other. A value out of range
+     * saves nothing.
+     */
+    public function test_the_calendar_step_saves_the_at_risk_percent(): void {
+        \local_studentrecords\form\school::mock_submit(['step' => 'calendar', 'atriskgrade' => '0']);
+        try {
+            $this->run_page('setup.php');
+            $this->fail('No redirect');
+        } catch (\moodle_exception $e) {
+            $this->assertSame('0', get_config('local_studentrecords', 'atriskgrade'));
+        }
+
+        \local_studentrecords\form\school::mock_submit(['step' => 'calendar', 'atriskgrade' => '101']);
+        $html = $this->run_page('setup.php');
+
+        $this->assertStringContainsString(get_string('err_percent0', 'local_studentrecords'), $html);
+        $this->assertSame('0', get_config('local_studentrecords', 'atriskgrade'));
+    }
+
+    /**
+     * The note of a page or part of one that needs the view demographics capability.
+     *
+     * @return string
+     */
+    private function demographics_note(): string {
+        $p = 'local_studentrecords';
+        return get_string('rep_needsdemographics', $p, get_string('studentrecords:viewdemographics', $p));
+    }
+
+    /**
+     * A registrar without view demographics is signed in and asks for the Counts tab of 2030. A student is in those counts:
+     * registered and graduated, with race and sex on file.
+     *
+     * @return int the registrar's role
+     */
+    private function registrar_on_the_counts_tab(): int {
+        global $DB;
+        $sr = $this->getDataGenerator()->get_plugin_generator('local_studentrecords');
+        $program = $sr->create_program(['code' => 'FNA-901', 'name' => 'Fine Arts Studio']);
+        $term = $sr->create_term();
+        $offer = $sr->create_offering(['courseid' => $sr->create_course()->id, 'termid' => $term->id]);
+        $sr->create_registration(['studentid' => $this->student->id, 'offerid' => $offer->id]);
+        $DB->update_record(students::TABLE, (object)['id' => $this->student->id, 'programid' => $program->id,
+            'awarddate' => $term->enddate]);
+        $DB->insert_record('local_studentrecords_demog', (object)['studentid' => $this->student->id, 'sex' => 'female',
+            'hispanic' => 'no', 'races' => 'asian']);
+        $user = $this->getDataGenerator()->create_user();
+        $roleid = create_role('Registrar', 'registrar', '');
+        assign_capability('local/studentrecords:managestudents', CAP_ALLOW, $roleid, SYSCONTEXTID);
+        role_assign($roleid, $user->id, SYSCONTEXTID);
+        accesslib_clear_all_caches_for_unit_testing();
+        $this->setUser($user);
+        $_GET = ['tab' => 'counts', 'from' => '2030-01-01', 'to' => '2030-12-31'];
+        return $roleid;
+    }
+
+    /**
+     * Without view demographics the headcount is a note saying what is needed, with no counts and nothing to download.
+     */
+    public function test_headcount_needs_the_demographics_capability(): void {
+        $this->registrar_on_the_counts_tab();
+
+        $html = $this->run_page('outsidereports.php');
+
+        $this->assertStringContainsString($this->demographics_note(), $html);
+        $this->assertStringNotContainsString('Asian', $html);
+        $this->assertStringNotContainsString('Female', $html);
+        $this->assertStringNotContainsString('name="download"', $html);
+    }
+
+    /**
+     * Completions by program show no race, ethnicity or sex, so they stay, with their own download. The counts by race and
+     * sex go, with theirs.
+     */
+    public function test_completions_by_program_stay_without_the_demographics_capability(): void {
+        $this->registrar_on_the_counts_tab();
+        $_GET['kind'] = 'completions';
+
+        $html = $this->run_page('outsidereports.php');
+
+        $this->assertStringContainsString('FNA-901', $html);
+        $this->assertStringContainsString('Fine Arts Studio', $html);
+        $this->assertSame(1, substr_count($html, 'name="download"'));
+        $this->assertStringContainsString('name="part" value="programs"', $html);
+        $this->assertStringContainsString($this->demographics_note(), $html);
+        $this->assertStringNotContainsString('Asian', $html);
+        $this->assertStringNotContainsString('Female', $html);
+    }
+
+    /**
+     * With view demographics both kinds of count show as before, with their downloads and no note.
+     */
+    public function test_counts_show_with_the_demographics_capability(): void {
+        $roleid = $this->registrar_on_the_counts_tab();
+        assign_capability('local/studentrecords:viewdemographics', CAP_ALLOW, $roleid, SYSCONTEXTID);
+        accesslib_clear_all_caches_for_unit_testing();
+
+        $html = $this->run_page('outsidereports.php');
+
+        $this->assertStringContainsString('Asian', $html);
+        $this->assertStringContainsString('Female', $html);
+        $this->assertStringNotContainsString($this->demographics_note(), $html);
+        $this->assertSame(1, substr_count($html, 'name="download"'));
+
+        $_GET['kind'] = 'completions';
+        $html = $this->run_page('outsidereports.php');
+
+        $this->assertStringContainsString('FNA-901', $html);
+        $this->assertStringContainsString('Asian', $html);
+        $this->assertStringContainsString('Female', $html);
+        $this->assertStringNotContainsString($this->demographics_note(), $html);
+        $this->assertSame(2, substr_count($html, 'name="download"'));
+    }
+
+    /**
+     * A download of the counts by race and sex is refused on the server, whatever the address asks for, and nothing is logged
+     * as exported.
+     *
+     * @dataProvider counts_download_provider
+     * @param array $request
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('counts_download_provider')]
+    public function test_a_download_of_the_counts_needs_the_demographics_capability(array $request): void {
+        global $DB;
+        $this->registrar_on_the_counts_tab();
+        $_GET = $request + $_GET + ['download' => 'csv'];
+
+        try {
+            $this->run_page('outsidereports.php');
+            $this->fail('The counts were sent.');
+        } catch (\required_capability_exception $e) {
+            $this->assertStringContainsString(
+                get_string('studentrecords:viewdemographics', 'local_studentrecords'),
+                $e->getMessage()
+            );
+        }
+
+        $this->assertSame(0, $DB->count_records('local_studentrecords_log', ['action' => 'export']));
+    }
+
+    /**
+     * With the capability the same download works, and the file has the counts.
+     */
+    public function test_a_download_of_the_counts_works_with_the_demographics_capability(): void {
+        global $DB;
+        $roleid = $this->registrar_on_the_counts_tab();
+        assign_capability('local/studentrecords:viewdemographics', CAP_ALLOW, $roleid, SYSCONTEXTID);
+        accesslib_clear_all_caches_for_unit_testing();
+        $_GET['download'] = 'csv';
+
+        $csv = $this->run_page('outsidereports.php');
+
+        $this->assertStringContainsString('Asian', $csv);
+        $this->assertStringContainsString('Female', $csv);
+        $this->assertSame(1, $DB->count_records('local_studentrecords_log', ['action' => 'export']));
+    }
+
+    /**
+     * The list of completions by program shows no race, ethnicity or sex, so it downloads without the capability. The file has
+     * the program and nothing else, and the download is logged.
+     */
+    public function test_completions_by_program_download_without_the_demographics_capability(): void {
+        global $DB;
+        $this->registrar_on_the_counts_tab();
+        $_GET = ['kind' => 'completions', 'part' => 'programs', 'download' => 'csv'] + $_GET;
+
+        $csv = $this->run_page('outsidereports.php');
+
+        $this->assertStringContainsString('FNA-901', $csv);
+        $this->assertStringContainsString('Fine Arts Studio', $csv);
+        $this->assertStringNotContainsString('Asian', $csv);
+        $this->assertStringNotContainsString('Female', $csv);
+        $this->assertStringNotContainsString('<html', $csv);
+        $log = $DB->get_records('local_studentrecords_log', ['action' => 'export']);
+        $this->assertCount(1, $log);
+        $this->assertStringContainsString('completions programs', reset($log)->info);
+    }
+
+    /**
+     * Data for test_a_download_of_the_counts_needs_the_demographics_capability.
+     *
+     * @return array
+     */
+    public static function counts_download_provider(): array {
+        return [
+            'headcount' => [[]],
+            'headcount, naming the list of programs' => [['part' => 'programs']],
+            'completions' => [['kind' => 'completions']],
+            'completions, naming another part' => [['kind' => 'completions', 'part' => 'grid']],
+        ];
     }
 
     /**

@@ -9,6 +9,10 @@ namespace local_studentrecords\local;
  * the no-reply address with the school name. Every message is logged, sent or skipped. In test mode only addresses at
  * example.com get messages.
  *
+ * A message goes at once, unless a transaction or a lock is open. Then it waits for cron: a mail server that hangs must not
+ * hold up a commit or anyone waiting for the lock, and one message that fails must not lose the others. The log says queued
+ * until the message really goes, and test mode, the message's switch and the person's account are read again at that moment.
+ *
  * @package    local_studentrecords
  * @copyright  2026 Clouve Inc.
  * @license    https://opensource.org/license/mit MIT
@@ -209,7 +213,7 @@ class messages {
     }
 
     /**
-     * Build, send and log one message.
+     * Build and log one message, and send it or leave it for cron.
      *
      * @param string $key
      * @param \stdClass|null $user recipient
@@ -217,7 +221,7 @@ class messages {
      * @param string $provider Moodle message type
      * @param \moodle_url $url
      * @param array $values
-     * @return bool sent
+     * @return bool sent: false for a message that waits for cron
      */
     protected static function deliver(
         string $key,
@@ -227,6 +231,7 @@ class messages {
         \moodle_url $url,
         array $values
     ): bool {
+        global $DB;
         $next = $studentid ? plans::next_due($studentid) : null;
         $values += ['school' => catalog::setting('schoolname'), 'firstname' => $user ? $user->firstname : '',
             'link' => $url->out(false), 'course' => '', 'term' => '',
@@ -235,41 +240,106 @@ class messages {
             'office_phone' => catalog::setting('phone')];
         $subject = \core_text::substr(self::fill(self::text($key, 'subject'), $values), 0, 255);
         if (!self::is_on($key)) {
-            return self::log($key, $user, $studentid, $subject, 'off');
+            self::log($key, $user, $studentid, $subject, 'off');
+            return false;
         }
-        if (!$user || !empty($user->deleted) || !empty($user->suspended)) {
-            return self::log($key, $user, $studentid, $subject, 'nouser');
+        if (!self::reachable($user)) {
+            self::log($key, $user, $studentid, $subject, 'nouser');
+            return false;
         }
         $body = self::fill(self::text($key, 'body'), $values);
-        $inbox = self::test_inbox();
-        if (self::test_mode() && $inbox !== '') {
-            // Test mode with a test inbox: the message goes only to the school's test inbox, never to the person.
-            $sent = self::email_inbox($inbox, $subject, $body);
-            self::log($key, $user, $studentid, $subject, $sent ? 'testinbox' : 'failed');
-            return $sent;
+        if ($DB->is_transaction_started() || registration::holds_lock()) {
+            $task = new \local_studentrecords\task\send_message();
+            $task->set_custom_data(['logid' => self::log($key, $user, $studentid, $subject, 'queued'), 'provider' => $provider,
+                'url' => $url->out(false), 'body' => $body]);
+            \core\task\manager::queue_adhoc_task($task);
+            return false;
         }
-        if (!self::allowed((string)$user->email, self::test_mode())) {
-            return self::log($key, $user, $studentid, $subject, 'testmode');
+        $status = self::send_now($user, $provider, $url, $subject, $body);
+        self::log($key, $user, $studentid, $subject, $status);
+        return in_array($status, ['sent', 'testinbox'], true);
+    }
+
+    /**
+     * Send a message that waited for cron, and write in its log row what happened. A message whose row a privacy request
+     * removed is not sent.
+     *
+     * @param \stdClass $job logid, provider, url, body
+     */
+    public static function send_queued(\stdClass $job): void {
+        global $DB;
+        $log = $DB->get_record(self::LOG, ['id' => $job->logid]);
+        if (!$log || $log->status !== 'queued') {
+            return;
         }
-        $from = clone \core_user::get_noreply_user();
-        $from->firstname = catalog::setting('schoolname') !== '' ? catalog::setting('schoolname') : $from->firstname;
-        $from->lastname = '';
-        $message = new \core\message\message();
-        $message->component = 'local_studentrecords';
-        $message->name = $provider;
-        $message->userfrom = $from;
-        $message->userto = $user;
-        $message->subject = $subject;
-        $message->fullmessage = $body;
-        $message->fullmessageformat = FORMAT_PLAIN;
-        $message->fullmessagehtml = '';
-        $message->smallmessage = $subject;
-        $message->notification = 1;
-        $message->contexturl = $url->out(false);
-        $message->contexturlname = get_string('pluginname', 'local_studentrecords');
-        $sent = (bool)message_send($message);
-        self::log($key, $user, $studentid, $subject, $sent ? 'sent' : 'failed');
-        return $sent;
+        $user = $log->userid ? (\core_user::get_user((int)$log->userid) ?: null) : null;
+        if (!self::is_on($log->msgkey)) {
+            $status = 'off';
+        } else if (!self::reachable($user)) {
+            $status = 'nouser';
+        } else {
+            $status = self::send_now($user, $job->provider, new \moodle_url($job->url), $log->subject, $job->body);
+        }
+        $DB->set_field(self::LOG, 'status', $status, ['id' => $log->id]);
+    }
+
+    /**
+     * Whether a person can get a message: they have a Moodle account that is in use.
+     *
+     * @param \stdClass|null $user
+     * @return bool
+     */
+    protected static function reachable(?\stdClass $user): bool {
+        return $user && empty($user->deleted) && empty($user->suspended);
+    }
+
+    /**
+     * Send a message now, as test mode allows. A message that can't be sent stops nothing: the log says so.
+     *
+     * @param \stdClass $user
+     * @param string $provider Moodle message type
+     * @param \moodle_url $url
+     * @param string $subject
+     * @param string $body
+     * @return string what happened: sent, failed, testinbox or testmode
+     */
+    protected static function send_now(
+        \stdClass $user,
+        string $provider,
+        \moodle_url $url,
+        string $subject,
+        string $body
+    ): string {
+        try {
+            $inbox = self::test_inbox();
+            if (self::test_mode() && $inbox !== '') {
+                // Test mode with a test inbox: the message goes only to the school's test inbox, never to the person.
+                return self::email_inbox($inbox, $subject, $body) ? 'testinbox' : 'failed';
+            }
+            if (!self::allowed((string)$user->email, self::test_mode())) {
+                return 'testmode';
+            }
+            $from = clone \core_user::get_noreply_user();
+            $from->firstname = catalog::setting('schoolname') !== '' ? catalog::setting('schoolname') : $from->firstname;
+            $from->lastname = '';
+            $message = new \core\message\message();
+            $message->component = 'local_studentrecords';
+            $message->name = $provider;
+            $message->userfrom = $from;
+            $message->userto = $user;
+            $message->subject = $subject;
+            $message->fullmessage = $body;
+            $message->fullmessageformat = FORMAT_PLAIN;
+            $message->fullmessagehtml = '';
+            $message->smallmessage = $subject;
+            $message->notification = 1;
+            $message->contexturl = $url->out(false);
+            $message->contexturlname = get_string('pluginname', 'local_studentrecords');
+            return message_send($message) ? 'sent' : 'failed';
+        } catch (\Throwable $e) {
+            debugging('Student Records message not sent: ' . $e->getMessage(), DEBUG_DEVELOPER);
+            return 'failed';
+        }
     }
 
     /**
@@ -279,14 +349,26 @@ class messages {
      * @param \stdClass|null $user
      * @param int $studentid
      * @param string $subject
-     * @param string $status sent, failed, off, nouser or testmode
-     * @return bool true when sent
+     * @param string $status queued, sent, failed, off, nouser, testmode, testinbox or test
+     * @return int log row id
      */
-    protected static function log(string $key, ?\stdClass $user, int $studentid, string $subject, string $status): bool {
+    protected static function log(string $key, ?\stdClass $user, int $studentid, string $subject, string $status): int {
         global $DB;
-        $DB->insert_record(self::LOG, (object)['msgkey' => $key, 'userid' => $user->id ?? null,
+        return (int)$DB->insert_record(self::LOG, (object)['msgkey' => $key, 'userid' => $user->id ?? null,
             'studentid' => $studentid ?: null, 'subject' => $subject, 'status' => $status, 'timecreated' => time()]);
-        return $status === 'sent';
+    }
+
+    /**
+     * What the log says about the newest message of a kind to a student.
+     *
+     * @param string $key
+     * @param int $studentid
+     * @return string a status, or '' when there is no such message
+     */
+    public static function last_status(string $key, int $studentid): string {
+        global $DB;
+        $rows = $DB->get_records(self::LOG, ['msgkey' => $key, 'studentid' => $studentid], 'id DESC', 'id, status', 0, 1);
+        return $rows ? reset($rows)->status : '';
     }
 
     /**

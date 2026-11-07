@@ -93,16 +93,32 @@ class srpost {
     }
 
     /**
+     * Do some work holding the lock of Student Records on a registration, the one that guards its grade. Start any transaction
+     * inside the work, never around this call: the lock must outlast the commit.
+     *
+     * @param int $regid
+     * @param callable $work
+     * @return mixed what the work returns
+     * @throws \moodle_exception when someone else keeps the lock for too long
+     */
+    public static function with_lock(int $regid, callable $work) {
+        // An older Student Records has no lock to share.
+        return method_exists(self::REG, 'with_lock') ?
+            \local_studentrecords\local\registration::with_lock('reg' . $regid, $work) : $work();
+    }
+
+    /**
      * Save the posted grade on the Student Records registration.
      *
      * @param int $courseid
      * @param int $userid
      * @param float|null $percent
      * @param string $grade
+     * @param int $regid the registration whose lock the caller holds through its commit, see with_lock()
      * @return string letter saved
      */
-    public static function post(int $courseid, int $userid, ?float $percent, string $grade): string {
-        return \local_studentrecords\local\registration::teacher_post($courseid, $userid, $percent, $grade);
+    public static function post(int $courseid, int $userid, ?float $percent, string $grade, int $regid): string {
+        return \local_studentrecords\local\registration::teacher_post($courseid, $userid, $percent, $grade, $regid);
     }
 
     /**

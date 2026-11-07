@@ -212,6 +212,305 @@ final class money_pages_test extends \advanced_testcase {
     }
 
     /**
+     * A student with an aid disbursement and a charge on the account.
+     *
+     * @return array [student, aid line id, charge line id]
+     */
+    private function student_with_aid(): array {
+        $this->setAdminUser();
+        $student = $this->generator->create_user_student();
+        $chargeid = $this->generator->create_charge(['studentid' => $student->id, 'amount' => 800]);
+        $award = aid::save_award($student, ['awardyear' => '2029-30', 'fund' => 'pell', 'amount' => 500, 'status' => 'accepted']);
+        return [$student, aid::disburse($award, 500, time()), $chargeid];
+    }
+
+    /**
+     * What the reverse form sends.
+     *
+     * @param array $request
+     * @return array
+     */
+    private function reverse_form(array $request): array {
+        return $request + ['reason' => 'Student not eligible', 'sesskey' => sesskey(),
+            '_qf__local_studentrecords_form_reverse' => 1, 'submitbutton' => 'Reverse'];
+    }
+
+    /**
+     * The end of a link to reverse a line.
+     *
+     * @param int $lineid
+     * @return string
+     */
+    private function reverse_link(int $lineid): string {
+        return 'action=reverse&amp;item=' . $lineid . '"';
+    }
+
+    /**
+     * Finance without the manage aid permission isn't offered the reversal of an aid line, and still is of other lines.
+     * With the permission, both are offered.
+     */
+    public function test_account_offers_the_reversal_of_an_aid_line_with_manageaid_only(): void {
+        [$student, $aidline, $charge] = $this->student_with_aid();
+        $finance = ['local/studentrecords:viewbilling', 'local/studentrecords:managebilling'];
+        $_GET = ['id' => $student->id];
+
+        $this->setUser($this->user_with($finance));
+        $html = $this->run_page('account.php');
+        $this->assertStringContainsString($this->reverse_link($charge), $html);
+        $this->assertStringNotContainsString($this->reverse_link($aidline), $html);
+
+        $this->setUser($this->user_with(array_merge($finance, ['local/studentrecords:manageaid'])));
+        $html = $this->run_page('account.php');
+        $this->assertStringContainsString($this->reverse_link($charge), $html);
+        $this->assertStringContainsString($this->reverse_link($aidline), $html);
+    }
+
+    /**
+     * Finance can't get to the reversal of an aid line by asking for it directly, neither the form nor a POST.
+     */
+    public function test_account_refuses_a_direct_reversal_of_an_aid_line(): void {
+        global $DB;
+        [$student, $aidline] = $this->student_with_aid();
+        $this->setUser($this->user_with(['local/studentrecords:viewbilling', 'local/studentrecords:managebilling']));
+        $_GET = ['id' => $student->id, 'action' => 'reverse', 'item' => $aidline];
+
+        $form = $this->failure(fn() => $this->run_page('account.php'));
+        $_POST = $this->reverse_form($_GET);
+        $post = $this->failure(fn() => $this->run_page('account.php'));
+
+        $this->assertSame('nopermissions', $form->errorcode);
+        $this->assertSame('nopermissions', $post->errorcode);
+        $this->assertNull($DB->get_field(billing::TXN, 'reversedby', ['id' => $aidline]));
+        $this->assertSame(300.0, billing::balance((int)$student->id));
+    }
+
+    /**
+     * Staff who hold both permissions reverse an aid line on the account page.
+     */
+    public function test_account_reverses_an_aid_line_with_manageaid(): void {
+        global $DB;
+        $this->preventResetByRollback();
+        [$student, $aidline] = $this->student_with_aid();
+        $this->setUser($this->user_with(['local/studentrecords:viewbilling', 'local/studentrecords:managebilling',
+            'local/studentrecords:manageaid']));
+        $_GET = ['id' => $student->id, 'action' => 'reverse', 'item' => $aidline];
+        $_POST = $this->reverse_form($_GET);
+
+        $error = $this->failure(fn() => $this->run_page('account.php'));
+
+        $this->assertSame('redirecterrordetected', $error->errorcode);
+        $this->assertNotNull($DB->get_field(billing::TXN, 'reversedby', ['id' => $aidline]));
+        $this->assertSame(800.0, billing::balance((int)$student->id));
+    }
+
+    /**
+     * Financial Aid staff can't open the student account, so they reverse a disbursement on the aid page. The page lists
+     * each disbursement and shows what was reversed.
+     */
+    public function test_aid_page_reverses_a_disbursement(): void {
+        global $DB;
+        $this->preventResetByRollback();
+        [$student, $aidline] = $this->student_with_aid();
+        $p = 'local_studentrecords';
+        $this->setUser($this->user_with(aid::ROLECAPS));
+        $page = ['report' => 'students', 'id' => $student->id, 'awardyear' => '2029-30'];
+
+        $_GET = $page;
+        $html = $this->run_page('aid.php');
+        $this->assertStringContainsString($this->reverse_link($aidline), $html);
+        $this->assertStringNotContainsString(get_string('reversed', $p), $html);
+
+        $_GET = $page + ['action' => 'reverse', 'item' => $aidline];
+        $form = $this->run_page('aid.php');
+        $this->assertStringContainsString(get_string('reverseline', $p), $form);
+        $this->assertStringContainsString(get_string('reverseaidinfo', $p), $form);
+        $this->assertStringNotContainsString(get_string('reverseinfo', $p), $form);
+
+        $_POST = $this->reverse_form($_GET);
+        $error = $this->failure(fn() => $this->run_page('aid.php'));
+        $this->assertSame('redirecterrordetected', $error->errorcode);
+        $this->assertNotNull($DB->get_field(billing::TXN, 'reversedby', ['id' => $aidline]));
+        $this->assertSame(800.0, billing::balance((int)$student->id));
+
+        $_POST = [];
+        $_GET = $page;
+        $html = $this->run_page('aid.php');
+        $this->assertStringContainsString(get_string('reversed', $p), $html);
+        $this->assertStringNotContainsString($this->reverse_link($aidline), $html);
+    }
+
+    /**
+     * Someone who may only see aid gets the list without the action, and a direct POST changes nothing.
+     */
+    public function test_aid_page_needs_manageaid_to_reverse(): void {
+        global $DB;
+        [$student, $aidline] = $this->student_with_aid();
+        $this->setUser($this->user_with(['local/studentrecords:viewaid']));
+        $page = ['report' => 'students', 'id' => $student->id, 'awardyear' => '2029-30'];
+
+        $_GET = $page;
+        $html = $this->run_page('aid.php');
+        $this->assertStringContainsString(s(get_string('aiddisbdesc', 'local_studentrecords', (object)[
+            'fund' => get_string('fund_pell', 'local_studentrecords'), 'year' => '2029-30'])), $html);
+        $this->assertStringNotContainsString($this->reverse_link($aidline), $html);
+
+        $_GET = $page + ['action' => 'reverse', 'item' => $aidline];
+        $_POST = $this->reverse_form($_GET);
+        $error = $this->failure(fn() => $this->run_page('aid.php'));
+
+        $this->assertSame('nopermissions', $error->errorcode);
+        $this->assertNull($DB->get_field(billing::TXN, 'reversedby', ['id' => $aidline]));
+    }
+
+    /**
+     * The aid page reverses aid lines of the student of the page and nothing else: the manage aid permission is no way to
+     * reverse a charge or a payment.
+     */
+    public function test_aid_page_reverses_only_aid_lines_of_its_student(): void {
+        global $DB;
+        [$student, $aidline, $charge] = $this->student_with_aid();
+        $other = $this->generator->create_user_student();
+        $this->setUser($this->user_with(aid::ROLECAPS));
+        $page = ['report' => 'students', 'id' => $student->id];
+
+        $_GET = $page + ['action' => 'reverse', 'item' => $charge];
+        $_POST = $this->reverse_form($_GET);
+        $notaid = $this->failure(fn() => $this->run_page('aid.php'));
+        $_GET = ['id' => $other->id, 'action' => 'reverse', 'item' => $aidline] + $page;
+        $_POST = $this->reverse_form($_GET);
+        $wrongstudent = $this->failure(fn() => $this->run_page('aid.php'));
+
+        $this->assertSame('err_notaidline', $notaid->errorcode);
+        $this->assertInstanceOf(\dml_missing_record_exception::class, $wrongstudent);
+        $this->assertSame(0, $DB->count_records_select(billing::TXN, 'reverses IS NOT NULL'));
+    }
+
+    /**
+     * The charge of an approved return of aid is listed on the aid page with its Reverse link, Finance alone isn't offered it
+     * on the account page, and Financial Aid staff can reverse it.
+     */
+    public function test_aid_page_lists_and_reverses_the_charge_of_a_return_of_aid(): void {
+        global $DB;
+        $this->preventResetByRollback();
+        $this->setAdminUser();
+        [$student, $termid] = $this->student_who_left();
+        refunds::decide(aidhelp::send_return($student, $termid), true, 'Sent');
+        $lineid = (int)$DB->get_field_select(billing::TXN, 'id', 'studentid = ? AND refundid IS NOT NULL', [$student->id]);
+        $balance = billing::balance((int)$student->id);
+        $amount = (float)$DB->get_field(billing::TXN, 'amount', ['id' => $lineid]);
+
+        $this->setUser($this->user_with(['local/studentrecords:viewbilling', 'local/studentrecords:managebilling']));
+        $_GET = ['id' => $student->id];
+        $this->assertStringNotContainsString($this->reverse_link($lineid), $this->run_page('account.php'));
+
+        $this->setUser($this->user_with(aid::ROLECAPS));
+        $page = ['report' => 'students', 'id' => $student->id, 'awardyear' => '2029-30'];
+        $_GET = $page;
+        $html = $this->run_page('aid.php');
+        $this->assertStringContainsString($this->reverse_link($lineid), $html);
+        $this->assertStringContainsString(s(get_string('ret_chargedesc', 'local_studentrecords', get_string(
+            'fund_dlunsub',
+            'local_studentrecords'
+        ))), $html);
+
+        $_GET = $page + ['action' => 'reverse', 'item' => $lineid];
+        $_POST = $this->reverse_form($_GET);
+        $error = $this->failure(fn() => $this->run_page('aid.php'));
+
+        $this->assertSame('redirecterrordetected', $error->errorcode);
+        $this->assertNotNull($DB->get_field(billing::TXN, 'reversedby', ['id' => $lineid]));
+        $this->assertSame(round($balance - $amount, 2), billing::balance((int)$student->id));
+    }
+
+    /**
+     * The award letter button of the aid page reports what happened to the message, not that it went: here it is switched off.
+     */
+    public function test_aid_page_says_what_happened_to_the_award_letter(): void {
+        global $DB;
+        $this->setAdminUser();
+        $this->generator->set_settings(['msgon_aidletter' => 0]);
+        $student = $this->generator->create_user_student();
+        $_GET = ['report' => 'students', 'id' => $student->id, 'awardyear' => '2029-30'];
+        $_POST = ['action' => 'letter', 'sesskey' => sesskey()];
+
+        $error = $this->failure(fn() => $this->run_page('aid.php'));
+
+        $this->assertSame('redirecterrordetected', $error->errorcode);
+        $this->assertTrue($DB->record_exists('local_studentrecords_log', ['objecttype' => 'aid', 'objectid' => $student->id,
+            'info' => 'award letter 2029-30: off']));
+    }
+
+    /**
+     * A wrong sesskey doesn't reverse a disbursement.
+     */
+    public function test_aid_page_reversal_needs_the_sesskey(): void {
+        global $DB;
+        [$student, $aidline] = $this->student_with_aid();
+        $this->setUser($this->user_with(aid::ROLECAPS));
+        $_GET = ['report' => 'students', 'id' => $student->id, 'action' => 'reverse', 'item' => $aidline];
+        $_POST = ['sesskey' => 'not-the-sesskey'] + $this->reverse_form($_GET);
+
+        $error = $this->failure(fn() => $this->run_page('aid.php'));
+
+        $this->assertSame('invalidsesskey', $error->errorcode);
+        $this->assertNull($DB->get_field(billing::TXN, 'reversedby', ['id' => $aidline]));
+    }
+
+    /**
+     * A completed plan whose payment was reversed can't reopen next to an active plan. Its heading doesn't say it is paid in
+     * full, and Finance reads why under the plan.
+     */
+    public function test_account_shows_a_plan_that_could_not_reopen(): void {
+        global $DB;
+        $this->preventResetByRollback();
+        $this->setAdminUser();
+        $p = 'local_studentrecords';
+        $student = $this->generator->create_user_student();
+        $this->generator->create_charge(['studentid' => $student->id, 'amount' => 1000]);
+        $terms = ['downtype' => 'percent', 'downvalue' => 25, 'numpay' => 2, 'frequency' => 'monthly', 'duemode' => 'relative',
+            'firstdue' => 30, 'planfee' => 0, 'latefee' => 0, 'gracedays' => 0];
+        $term = (int)$this->generator->create_term()->id;
+        $fall = \local_studentrecords\local\plans::create($student, $term, null, $terms + ['name' => 'Fall'], 'Custom');
+        $DB->set_field(\local_studentrecords\local\plans::STUPLANS, 'timeapproved', time() - 60 * DAYSECS, ['id' => $fall]);
+        $line = payments::record($student, 1000, 'check');
+        $DB->set_field(billing::TXN, 'timecreated', time() - 50 * DAYSECS, ['id' => $line]);
+        \local_studentrecords\local\plans::sync($student);
+        $_GET = ['id' => $student->id];
+        $this->assertStringContainsString(get_string('planstatus_completed', $p), $this->run_page('account.php'));
+
+        $this->generator->create_charge(['studentid' => $student->id, 'amount' => 800]);
+        \local_studentrecords\local\plans::create($student, $term, null, $terms + ['name' => 'Spring'], 'Custom');
+        billing::reverse($line, 'Check returned');
+        \core\notification::fetch();
+        $html = $this->run_page('account.php');
+
+        $this->assertStringContainsString(get_string('planstatus_reversed', $p), $html);
+        $this->assertStringNotContainsString(get_string('planstatus_completed', $p), $html);
+        $note = get_string('plan_notreopened', $p, (object)['plan' => 'Fall', 'active' => 'Spring']);
+        $this->assertStringContainsString(s($note), $html);
+    }
+
+    /**
+     * Finance sees at once that a student on a plan can't get another one: the page goes back to the account, where the plan
+     * and its Cancel link are, instead of opening a form that can't be saved.
+     */
+    public function test_a_student_on_a_plan_gets_no_plan_form(): void {
+        $this->setAdminUser();
+        $student = $this->generator->create_user_student();
+        $this->generator->create_charge(['studentid' => $student->id, 'amount' => 800]);
+        $term = $this->generator->create_term();
+        $_GET = ['id' => $student->id, 'action' => 'plan'];
+        $this->assertStringContainsString(get_string('giveplan', 'local_studentrecords'), $this->run_page('account.php'));
+
+        \local_studentrecords\local\plans::create($student, (int)$term->id, null, ['name' => 'Plan', 'downtype' => 'percent',
+            'downvalue' => 25, 'numpay' => 2, 'frequency' => 'monthly', 'duemode' => 'relative', 'firstdue' => 30, 'planfee' => 0,
+            'latefee' => 0, 'gracedays' => 0], 'Custom');
+        $error = $this->failure(fn() => $this->run_page('account.php'));
+
+        $this->assertSame('redirecterrordetected', $error->errorcode);
+    }
+
+    /**
      * Staff pages stay closed to a student.
      *
      * @dataProvider staff_page_provider

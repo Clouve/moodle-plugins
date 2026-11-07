@@ -2,7 +2,8 @@
 
 /**
  * A student account: every charge, credit and payment with the running balance. Finance staff add charges and
- * credits and reverse lines (nothing is changed or removed); the student sees their own account.
+ * credits and reverse lines (nothing is changed or removed; an aid line also needs the manage aid permission); the student
+ * sees their own account.
  *
  * @package    local_studentrecords
  * @copyright  2026 Clouve Inc.
@@ -43,6 +44,7 @@ if (!billing::can_view($student)) {
 }
 $staff = has_capability('local/studentrecords:viewbilling', $syscontext);
 $manage = has_capability('local/studentrecords:managebilling', $syscontext);
+$manageaid = has_capability('local/studentrecords:manageaid', $syscontext);
 $url = new moodle_url('/local/studentrecords/account.php', ['id' => $id]);
 $back = $url;
 if ($staff) {
@@ -70,9 +72,16 @@ if (
     )
 ) {
     require_capability('local/studentrecords:managebilling', $syscontext);
+    if ($action === 'plan' && plans::has_active($id)) {
+        // Say so before staff fill in a form that can't be saved. The account page shows the plan and how to cancel it.
+        redirect($back, get_string('err_planexists', $p), null, \core\output\notification::NOTIFY_ERROR);
+    }
     $formurl = new moodle_url($url, ['action' => $action, 'item' => $item]);
     if ($action === 'reverse') {
         $line = $DB->get_record(billing::TXN, ['id' => $item, 'studentid' => $id], '*', MUST_EXIST);
+        if (billing::is_aid_line($line)) {
+            require_capability('local/studentrecords:manageaid', $syscontext);
+        }
         $form = new \local_studentrecords\form\reverse($formurl, ['text' => s($line->description) . ' ' .
             billing::money((float)$line->amount)]);
         $form->set_data(['id' => $id, 'action' => $action, 'item' => $item]);
@@ -316,8 +325,9 @@ foreach (billing::lines($id, $termid) as $l) {
         $type, $receipt, billing::money((float)$l->amount), billing::money((float)$l->running)];
     if ($staff) {
         $row[] = $l->userid ? s(fullname(core_user::get_user($l->userid))) : '';
-        $row[] = $manage && !$l->reversedby && !$l->reverses ? html_writer::link(new moodle_url($url, ['action' => 'reverse',
-            'item' => $l->id]), get_string('reverse', $p)) : '';
+        $reversible = $manage && !$l->reversedby && !$l->reverses && ($manageaid || !billing::is_aid_line($l));
+        $reverseurl = new moodle_url($url, ['action' => 'reverse', 'item' => $l->id]);
+        $row[] = $reversible ? html_writer::link($reverseurl, get_string('reverse', $p)) : '';
     }
     $table->data[] = $row;
 }
@@ -368,8 +378,10 @@ if ($studentplans) {
     echo $OUTPUT->heading(get_string('paymentplans', $p), 3);
 }
 foreach ($studentplans as $plan) {
+    // A completed plan with an unpaid payment had a payment reversed and could not reopen.
+    $unpaid = array_filter($plan->insts, fn($inst) => $inst->status !== 'paid');
     $title = s($plan->name) . ' - ' . ($plan->termid ? format_string($terms[$plan->termid] ?? '') . ' - ' : '') .
-        get_string('planstatus_' . $plan->status, $p);
+        get_string('planstatus_' . ($plan->status === 'completed' && $unpaid ? 'reversed' : $plan->status), $p);
     if ($manage && $plan->status === 'active') {
         $title .= ' ' . html_writer::link(
             new moodle_url($url, ['action' => 'cancelplan', 'item' => $plan->id]),

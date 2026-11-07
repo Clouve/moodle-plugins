@@ -42,7 +42,7 @@ class school extends \moodleform {
                     $options[$c] = get_string('calendar_' . $c, $p);
                 }
                 $m->addElement('select', $name, $label, $options);
-            } else if ($type === 'percent' || $type === 'number' || $type === 'hours') {
+            } else if (in_array($type, ['percent', 'percent0', 'number', 'hours'], true)) {
                 $m->addElement('text', $name, $label, ['size' => 5]);
             } else {
                 $m->addElement('text', $name, $label, ['size' => 60]);
@@ -82,6 +82,9 @@ class school extends \moodleform {
             $v = trim((string)($data[$name] ?? ''));
             if ($type === 'percent' && $v !== '' && (!is_numeric($v) || $v <= 0 || $v > 100)) {
                 $errors[$name] = get_string('err_percent', 'local_studentrecords');
+            }
+            if ($type === 'percent0' && $v !== '' && (!is_numeric($v) || $v < 0 || $v > 100)) {
+                $errors[$name] = get_string('err_percent0', 'local_studentrecords');
             }
             if ($type === 'number' && $v !== '' && (!ctype_digit($v) || $v < 1 || $v > 10)) {
                 $errors[$name] = get_string('err_padding', 'local_studentrecords');

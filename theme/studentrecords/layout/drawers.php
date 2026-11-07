@@ -139,6 +139,8 @@ $templatecontext = [
     'srdrawerheading' => $srdrawerheading,
     // Moodle 5.2 changed the drawers: a course name heading and sidebar icons, which 4.5 and 5.1 do not have.
     'srnewdrawers' => (int)($CFG->branch ?? 0) >= 502,
+    // Boost has a divider after the search box up to Moodle 5.2, and none from Moodle 5.3.
+    'srsearchdivider' => (int)($CFG->branch ?? 0) < 503,
     'srnote' => $srnote,
     'srcardtop' => ($srcard !== '' && !$srcardaside) ? $srcard : '',
     'srcardaside' => $srcardaside ? $srcard : '',

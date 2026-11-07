@@ -23,6 +23,15 @@ class requests {
     /** @var string[] When to send. */
     const TIMING = ['now', 'grades', 'degree'];
 
+    /** @var int Seconds to wait for another click or person working on the same request. */
+    const LOCKWAIT = 10;
+
+    /**
+     * @var int Seconds in which the same action again counts as the same click: the same request while it is pending, Reissue
+     * of a copy just made, or the same recipient on the student's page.
+     */
+    const REPEATWINDOW = 60;
+
     /**
      * Fee of a delivery.
      *
@@ -140,43 +149,113 @@ class requests {
     }
 
     /**
+     * Do some work holding a lock, so that two requests can't both read a row and then act on it. The work starts and
+     * commits its own transaction, so the lock is released after the commit, and whoever waited sees what was saved.
+     *
+     * This is Moodle's lock, not the one of Student Records, because this plugin also works without that plugin.
+     *
+     * @param string $resource what is locked, for example request12 or issue34
+     * @param callable $work
+     * @return mixed what the work returns
+     * @throws \moodle_exception when the lock stays taken for too long
+     */
+    protected static function one_at_a_time(string $resource, callable $work) {
+        $lock = \core\lock\lock_config::get_lock_factory('local_academictranscript')->get_lock($resource, self::LOCKWAIT);
+        if (!$lock) {
+            throw new \moodle_exception('req_err_busy', 'local_academictranscript');
+        }
+        try {
+            return $work();
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /**
      * Save a request. The fee goes on the student's account when it can (see can_charge()).
+     *
+     * A double click sends the form twice, and both can run at the same moment. Under the lock one saves first, and the other
+     * finds that request and saves nothing, so there is one request and one fee. A different request is new at any time, and
+     * so is the same request after REPEATWINDOW or after the registrar has acted on it.
      *
      * @param int $userid
      * @param array $data
+     * @param bool|null $repeated set to true when this was the same request again and nothing was saved
      * @return int request id
      */
-    public static function create(int $userid, array $data): int {
-        global $DB;
+    public static function create(int $userid, array $data, ?bool &$repeated = null): int {
+        $repeated = false;
         $problems = self::problems($data);
         if ($problems) {
             throw new \moodle_exception(reset($problems), 'local_academictranscript');
         }
-        $fee = self::fee($data['delivery']);
+        $row = (object)['userid' => $userid, 'delivery' => $data['delivery'],
+            'recipient' => \core_text::substr(trim($data['recipient']), 0, 255),
+            'email' => $data['delivery'] === 'email' ? \core_text::substr(trim($data['email']), 0, 255) : null,
+            'address' => $data['delivery'] === 'mail' ? trim($data['address']) : null, 'timing' => $data['timing']];
+        return self::one_at_a_time('request' . $userid, function () use ($row, &$repeated) {
+            $id = self::same_request($row);
+            $repeated = $id !== null;
+            return $id ?? self::save_request($row);
+        });
+    }
+
+    /**
+     * The student's request that this one repeats: still pending, made a moment ago, and the same in all the student chose.
+     * The caller holds the lock on the student.
+     *
+     * @param \stdClass $row the new request
+     * @return int|null request id
+     */
+    protected static function same_request(\stdClass $row): ?int {
+        global $DB;
+        $recent = $DB->get_records_select(
+            self::TABLE,
+            'userid = ? AND status = ? AND timecreated >= ?',
+            [$row->userid, 'pending', time() - self::REPEATWINDOW]
+        );
+        foreach ($recent as $r) {
+            if (
+                $r->delivery === $row->delivery && $r->recipient === $row->recipient && $r->timing === $row->timing &&
+                    (string)$r->email === (string)$row->email && (string)$r->address === (string)$row->address
+            ) {
+                return (int)$r->id;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Save a new request and its fee, all or nothing. The caller holds the lock on the student.
+     *
+     * @param \stdClass $row
+     * @return int request id
+     */
+    protected static function save_request(\stdClass $row): int {
+        global $DB;
+        $userid = (int)$row->userid;
+        $fee = self::fee($row->delivery);
         $now = time();
         $transaction = $DB->start_delegated_transaction();
         try {
-            $id = (int)$DB->insert_record(self::TABLE, (object)['userid' => $userid, 'delivery' => $data['delivery'],
-                'recipient' => \core_text::substr(trim($data['recipient']), 0, 255),
-                'email' => $data['delivery'] === 'email' ? \core_text::substr(trim($data['email']), 0, 255) : null,
-                'address' => $data['delivery'] === 'mail' ? trim($data['address']) : null, 'timing' => $data['timing'],
-                'fee' => $fee, 'charged' => 0, 'status' => 'pending', 'timecreated' => $now, 'timemodified' => $now]);
+            $id = (int)$DB->insert_record(self::TABLE, (object)((array)$row + ['fee' => $fee, 'charged' => 0, 'status' => 'pending',
+                'timecreated' => $now, 'timemodified' => $now]));
             if ($fee > 0 && self::can_charge($userid)) {
                 $student = \local_studentrecords\local\students::get_by_user($userid);
                 \local_studentrecords\local\billing::add_line(['studentid' => $student->id, 'txntype' => 'charge',
                     'amount' => $fee, 'description' => get_string(
                         'req_chargedesc',
                         'local_academictranscript',
-                        get_string('req_delivery_' . $data['delivery'], 'local_academictranscript')
+                        get_string('req_delivery_' . $row->delivery, 'local_academictranscript')
                     ), 'txndate' => $now,
                     'qualified' => 0, 'refundable' => 0, 'note' => 'transcript request ' . $id]);
                 $DB->set_field(self::TABLE, 'charged', 1, ['id' => $id]);
             }
-            logger::log('request', $userid, 0, $data['delivery'] . ' ' . $data['timing']);
-            $transaction->allow_commit();
+            logger::log('request', $userid, 0, $row->delivery . ' ' . $row->timing);
         } catch (\Throwable $e) {
             $transaction->rollback($e);
         }
+        logger::commit($transaction, $userid);
         return $id;
     }
 
@@ -185,17 +264,39 @@ class requests {
      *
      * A hold blocks both: "the registrar sends it when the hold is released" is what the student is told.
      *
+     * Two clicks on Issue or on Reissue, or two registrars, can run at the same moment. Under the lock one makes the copy, and
+     * the other finds it and makes nothing. Reissue works again after REPEATWINDOW.
+     *
      * @param int $requestid
-     * @param bool $again true to issue a request that was issued before. Keeping this apart from a first issue means a
-     *     double click on Issue doesn't make a second transcript.
+     * @param bool $again true to issue a request that was issued before. Only Reissue asks for that.
      * @return \stdClass the issue record
      */
     public static function issue(int $requestid, bool $again = false): \stdClass {
+        return self::one_at_a_time('issue' . $requestid, fn() => self::issue_request($requestid, $again));
+    }
+
+    /**
+     * Check a request and make its Official transcript. The caller holds the lock on the request.
+     *
+     * @param int $requestid
+     * @param bool $again
+     * @return \stdClass the issue record
+     */
+    protected static function issue_request(int $requestid, bool $again): \stdClass {
         global $DB, $USER;
         $r = $DB->get_record(self::TABLE, ['id' => $requestid], '*', MUST_EXIST);
+        if ($r->status === 'cancelled') {
+            throw new \moodle_exception('req_err_cancelled', 'local_academictranscript');
+        }
+        if (!$again && $r->status === 'issued') {
+            throw new \moodle_exception('req_err_issued', 'local_academictranscript');
+        }
         $ready = $again ? $r->status === 'issued' && !self::holds((int)$r->userid) : self::state($r) === 'pending';
         if (!$ready) {
             throw new \moodle_exception('req_err_notready', 'local_academictranscript');
+        }
+        if ($again && (int)$r->timeissued >= time() - self::REPEATWINDOW) {
+            throw new \moodle_exception('req_err_justissued', 'local_academictranscript');
         }
         $transaction = $DB->start_delegated_transaction();
         try {
@@ -207,22 +308,84 @@ class requests {
             $DB->update_record(self::TABLE, (object)['id' => $r->id, 'status' => 'issued', 'issueid' => $issue->id,
                 'issuedby' => $USER->id, 'timeissued' => $now, 'timemodified' => $now]);
             logger::log('request_issued', (int)$r->userid, (int)$issue->id, (string)$r->id);
-            $transaction->allow_commit();
         } catch (\Throwable $e) {
             $transaction->rollback($e);
         }
+        logger::commit($transaction, (int)$r->userid);
         return $issue;
+    }
+
+    /**
+     * Issue an Official transcript from the student's page, with no request behind it (staff).
+     *
+     * A double click sends the form twice, and both can run at the same moment. Under the lock one makes the transcript, and
+     * the other gets that copy back. Another recipient is a new transcript at any time, and so is the same recipient after
+     * REPEATWINDOW.
+     *
+     * @param int $userid
+     * @param string $recipient
+     * @param bool|null $repeated set to true when this was the same issue again and nothing was made
+     * @return \stdClass the issue record
+     */
+    public static function issue_direct(int $userid, string $recipient, ?bool &$repeated = null): \stdClass {
+        $repeated = false;
+        return self::one_at_a_time('direct' . $userid, function () use ($userid, $recipient, &$repeated) {
+            $issue = self::same_issue($userid, $recipient);
+            $repeated = $issue !== null;
+            return $issue ?? transcript::issue($userid, $recipient);
+        });
+    }
+
+    /**
+     * The Official transcript this one repeats: for the same student and recipient, and made a moment ago. The caller holds the
+     * lock on the student.
+     *
+     * @param int $userid
+     * @param string $recipient
+     * @return \stdClass|null id, recipient, transcriptno and verifycode of the issue
+     */
+    protected static function same_issue(int $userid, string $recipient): ?\stdClass {
+        global $DB;
+        $recipient = \core_text::substr(trim($recipient), 0, 255);
+        $recent = $DB->get_records_select(
+            'local_academictranscript_issue',
+            'userid = ? AND timecreated >= ?',
+            [$userid, time() - self::REPEATWINDOW],
+            'id DESC',
+            'id, recipient, transcriptno, verifycode'
+        );
+        foreach ($recent as $issue) {
+            if ((string)$issue->recipient === $recipient) {
+                return $issue;
+            }
+        }
+        return null;
     }
 
     /**
      * Cancel a request that is not issued yet. A fee already on the account stays, and staff can credit it.
      *
+     * This takes the lock of issue(), so Cancel and Issue can't both go ahead: whichever comes second changes nothing.
+     *
      * @param int $requestid
      * @param string $note
      */
     public static function cancel(int $requestid, string $note): void {
+        self::one_at_a_time('issue' . $requestid, fn() => self::cancel_request($requestid, $note));
+    }
+
+    /**
+     * Check a request and cancel it. The caller holds the lock on the request.
+     *
+     * @param int $requestid
+     * @param string $note
+     */
+    protected static function cancel_request(int $requestid, string $note): void {
         global $DB;
         $r = $DB->get_record(self::TABLE, ['id' => $requestid], '*', MUST_EXIST);
+        if ($r->status === 'issued') {
+            throw new \moodle_exception('req_err_notcancelled', 'local_academictranscript');
+        }
         if ($r->status !== 'pending') {
             throw new \moodle_exception('req_err_notpending', 'local_academictranscript');
         }

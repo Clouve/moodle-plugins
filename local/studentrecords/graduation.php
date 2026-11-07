@@ -10,6 +10,7 @@
 
 require_once(__DIR__ . '/../../config.php');
 
+use local_studentrecords\local\access;
 use local_studentrecords\local\catalog;
 use local_studentrecords\local\degreeaudit;
 use local_studentrecords\local\graduation;
@@ -28,6 +29,9 @@ $url = new moodle_url('/local/studentrecords/graduation.php');
 if ($appid && in_array($action, ['review', 'confer', 'cancel'], true)) {
     $app = $DB->get_record(graduation::TABLE, ['id' => $appid], '*', MUST_EXIST);
     $student = students::get((int)$app->studentid);
+    if ($action !== 'cancel') {
+        graduation::require_not_own($student);
+    }
     $programs = catalog::programs(false);
     $text = s(students::display_name($student) . ' (' . $student->studentid . '), ') . ($programs[$app->programid] ?? '');
     $audit = $action === 'review' ? degreeaudit::run($student) : null;
@@ -71,7 +75,7 @@ if ($appid && in_array($action, ['review', 'confer', 'cancel'], true)) {
     }
     $form->display();
     echo $OUTPUT->footer();
-    die();
+    return;
 }
 
 echo staffarea::header();
@@ -82,7 +86,7 @@ foreach (array_merge(graduation::STATES, ['all']) as $s) {
 }
 echo $OUTPUT->tabtree($tabs, $state);
 $where = $state === 'all' ? '' : 'WHERE g.state = ?';
-$rows = $DB->get_records_sql("SELECT g.*, s.studentid AS sid, s.legalfirstname, s.legalmiddlename, s.legallastname,
+$rows = $DB->get_records_sql("SELECT g.*, s.studentid AS sid, s.userid, s.legalfirstname, s.legalmiddlename, s.legallastname,
                                      s.preferredname
                                 FROM {" . graduation::TABLE . "} g
                                 JOIN {" . students::TABLE . "} s ON s.id = g.studentid
@@ -98,13 +102,13 @@ foreach ($rows as $r) {
     $link = function ($a) use ($url, $r, $p) {
         return html_writer::link(new moodle_url($url, ['app' => $r->id, 'action' => $a]), get_string('gradaction_' . $a, $p));
     };
-    if ($r->state === 'applied') {
-        $actions[] = $link('review');
+    $open = in_array($r->state, ['applied', 'approved'], true);
+    if ($open && access::is_own($r)) {
+        $actions[] = html_writer::span(get_string('gradownapp', $p), 'text-muted small');
+    } else if ($open) {
+        $actions[] = $link($r->state === 'applied' ? 'review' : 'confer');
     }
-    if ($r->state === 'approved') {
-        $actions[] = $link('confer');
-    }
-    if (in_array($r->state, ['applied', 'approved'], true)) {
+    if ($open) {
         $actions[] = $link('cancel');
     }
     $table->data[] = [catalog::show_date((int)$r->timeapplied), s($r->sid), html_writer::link(new moodle_url(

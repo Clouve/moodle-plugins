@@ -15,7 +15,8 @@ require_once($CFG->libdir . '/gradelib.php');
  */
 class posting {
     /**
-     * What would be posted for a student now: the hand-entered code, else the letter from the course total.
+     * What would be posted for a student now: the hand-entered code, else the letter from the course total. Nobody posts their
+     * own final grade, so the current user's own row has an error.
      *
      * @param int $courseid
      * @param int $userid
@@ -23,7 +24,7 @@ class posting {
      *     'posted' => posted record or null, 'sr' => Student Records target (srpost::target()) or null]
      */
     public static function preview(int $courseid, int $userid): array {
-        global $DB;
+        global $DB, $USER;
         $fields = coursefields::get_resolved([$courseid])[$courseid];
         $coderow = $DB->get_record('local_academictranscript_code', ['userid' => $userid, 'courseid' => $courseid]);
         $termid = terms::effective($userid, $courseid, $fields['termindex'], $coderow ?: null);
@@ -42,13 +43,18 @@ class posting {
                 ['userid' => $userid, 'courseid' => $courseid, 'termid' => $termid]
             ) ?: null;
         }
-        if ($coderow && isset(scale::teacher_marks()[(string)$coderow->code])) {
-            $result['grade'] = $coderow->code;
+        $result['sr'] = srpost::target($courseid, $userid);
+        $code = $coderow ? (string)$coderow->code : '';
+        if ($code !== '' && isset(self::marks_for($result['sr'])[$code])) {
+            $result['grade'] = $code;
+        } else if ($code !== '' && $result['sr']) {
+            // A mark the teacher saved is never swapped for the course total without a word.
+            $result['error'] = $result['error'] ?: get_string('err_teacherpost_notonscale', 'local_studentrecords');
         } else {
             $percent = self::course_percent($courseid, $userid);
             if ($percent !== null) {
                 $result['percent'] = $percent;
-                $result['grade'] = scale::letter($percent);
+                $result['grade'] = self::letter($percent, $result['sr']);
                 if ($result['grade'] === null && !$result['error']) {
                     $result['error'] = get_string('noscalematch', 'local_academictranscript');
                 }
@@ -57,10 +63,9 @@ class posting {
         if (!$result['error'] && $result['grade'] === null) {
             $result['error'] = get_string('nogradetopost', 'local_academictranscript');
         }
-        $result['sr'] = srpost::target($courseid, $userid);
-        if ($result['sr'] && $result['grade'] !== null) {
-            // The school's grading scale in Student Records decides the letter, also on a row that can't post.
-            $result['grade'] = srpost::letter($result['percent'], (string)$result['grade']);
+        if ($result['sr'] && $result['percent'] === null && $result['grade'] !== null) {
+            // A hand-entered mark has to be on the scale in Student Records too.
+            $result['grade'] = srpost::letter(null, (string)$result['grade']);
         }
         if ($result['sr'] && !$result['error']) {
             $result['error'] = srpost::problem($result['sr']);
@@ -68,7 +73,31 @@ class posting {
                 $result['error'] = get_string('err_teacherpost_notonscale', 'local_studentrecords');
             }
         }
+        if ($userid === (int)$USER->id) {
+            $result['error'] = get_string('ownposting', 'local_academictranscript');
+        }
         return $result;
+    }
+
+    /**
+     * Marks a teacher can give a student: those of Student Records for a student with a file there, else this plugin's.
+     *
+     * @param array|null $target srpost::target() of the student
+     * @return array code => label, escaped for a menu
+     */
+    public static function marks_for(?array $target): array {
+        return $target ? srsource::teacher_marks() : scale::teacher_marks();
+    }
+
+    /**
+     * Letter for a course total: on the scale in Student Records for a student with a file there, else on this plugin's.
+     *
+     * @param float $percent
+     * @param array|null $target srpost::target() of the student
+     * @return string|null null when the scale has no row for it
+     */
+    public static function letter(float $percent, ?array $target): ?string {
+        return $target ? srpost::letter($percent, '') : scale::letter($percent);
     }
 
     /**
@@ -95,11 +124,36 @@ class posting {
      * When Student Records is the transcript source, the grade also goes on the student's registration there.
      * Locks the student's course total in the gradebook.
      *
+     * The lock on the registration is taken before the transaction starts and released after it commits. Held for less, the
+     * Registrar could read the registration and write on it while this posting isn't saved yet, and the two would end out of
+     * step. The save in Student Records finds the lock already held, so it doesn't release it early.
+     *
      * @param int $courseid
      * @param int $userid
      * @return \stdClass posted record
      */
     public static function post(int $courseid, int $userid): \stdClass {
+        $target = srpost::target($courseid, $userid);
+        $regid = $target ? (int)$target['regid'] : 0;
+        $save = fn() => self::save_posted($courseid, $userid, $regid);
+        $record = $regid ? srpost::with_lock($regid, $save) : $save();
+
+        self::lock_course_total($courseid, $userid);
+        logger::log('post', $userid, 0, "course $courseid term {$record->termid} grade {$record->grade}" .
+            ($record->srregid ? " studentrecords reg {$record->srregid}" : ''));
+        return $record;
+    }
+
+    /**
+     * Check a posting and save it, all or nothing. The checks run here, under the lock, so they see what was saved during the
+     * wait for it.
+     *
+     * @param int $courseid
+     * @param int $userid
+     * @param int $regid the registration whose lock this request holds, 0 for none
+     * @return \stdClass posted record
+     */
+    protected static function save_posted(int $courseid, int $userid, int $regid): \stdClass {
         global $DB, $USER;
         $preview = self::preview($courseid, $userid);
         if ($preview['error']) {
@@ -132,7 +186,7 @@ class posting {
         try {
             $record->id = $DB->insert_record('local_academictranscript_posted', $record);
             if ($preview['sr']) {
-                srpost::post($courseid, $userid, $preview['percent'], (string)$preview['grade']);
+                srpost::post($courseid, $userid, $preview['percent'], (string)$preview['grade'], $regid);
             }
 
             // The hand-entered code belongs to this attempt: clear it (row kept) so a later attempt starts clean.
@@ -141,15 +195,10 @@ class posting {
                     'reason' => get_string('clearedonpost', 'local_academictranscript'), 'usermodified' => $USER->id,
                     'timemodified' => $now]);
             }
-
-            $transaction->allow_commit();
         } catch (\Throwable $e) {
             $transaction->rollback($e);
         }
-
-        self::lock_course_total($courseid, $userid);
-        logger::log('post', $userid, 0, "course $courseid term {$record->termid} grade {$record->grade}" .
-            ($preview['sr'] ? " studentrecords reg {$preview['sr']['regid']}" : ''));
+        logger::commit($transaction, $userid);
         return $record;
     }
 
@@ -238,16 +287,37 @@ class posting {
     }
 
     /**
+     * Why the current user can't decide a change request, or '' when they can: nobody decides their own request, and nobody
+     * decides on their own grade. The approvals page uses this to leave out the buttons, and decide() checks it again.
+     *
+     * @param \stdClass $change the request
+     * @param int $studentid the user whose grade it is
+     * @return string language string id, or ''
+     */
+    public static function decide_problem(\stdClass $change, int $studentid): string {
+        global $USER;
+        if ($studentid === (int)$USER->id) {
+            return 'changeownrecord';
+        }
+        return (int)$change->requestedby === (int)$USER->id ? 'changeownrequest' : '';
+    }
+
+    /**
      * Approve or reject a change request.
      *
      * @param int $changeid
      * @param bool $approve
      * @param string $decisionnote
+     * @throws \moodle_exception when the current user can't decide it, see decide_problem()
      */
     public static function decide(int $changeid, bool $approve, string $decisionnote): void {
         global $DB, $USER;
         $change = $DB->get_record('local_academictranscript_change', ['id' => $changeid, 'status' => 'pending'], '*', MUST_EXIST);
         $posted = $DB->get_record('local_academictranscript_posted', ['id' => $change->postedid], '*', MUST_EXIST);
+        $problem = self::decide_problem($change, (int)$posted->userid);
+        if ($problem !== '') {
+            throw new \moodle_exception($problem, 'local_academictranscript');
+        }
         $now = time();
         $transaction = $DB->start_delegated_transaction();
         if ($approve) {

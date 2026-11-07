@@ -70,7 +70,8 @@ $PAGE->set_title(get_string($own ? 'nav_myacademicrecord' : 'studentrecord', $p)
 $header = fn() => $staff ? staffarea::header() : $OUTPUT->header();
 
 if ($edit) {
-    $form = new \local_studentrecords\form\student($url, ['id' => $id]);
+    $mine = $student && access::is_own($student);
+    $form = new \local_studentrecords\form\student($url, ['id' => $id, 'own' => $mine]);
     $draftid = file_get_submitted_draft_itemid('documents');
     file_prepare_draft_area($draftid, $syscontext->id, $p, 'studentdocs', $id ?: null, ['maxfiles' => 20, 'subdirs' => 0]);
     if ($student) {
@@ -112,6 +113,10 @@ if ($edit) {
             unset($record['id']);
         }
         unset($record['documents'], $record['submitbutton']);
+        if ($mine) {
+            // The form shows these on a person's own record and doesn't change them.
+            $record = array_diff_key($record, array_flip(array_merge(students::DECIDING, ['statusnote'])));
+        }
         $newid = students::save($record);
         file_save_draft_area_files(
             $data->documents,
@@ -132,7 +137,7 @@ if ($edit) {
     echo $OUTPUT->heading(get_string($id ? 'editstudent' : 'addstudent', $p));
     $form->display();
     echo $OUTPUT->footer();
-    die();
+    return;
 }
 
 if (!$student) {
@@ -206,7 +211,7 @@ if ($staff) {
         echo $table->data ? html_writer::table($table) : html_writer::tag('p', get_string('none'));
     }
     echo $OUTPUT->footer();
-    die();
+    return;
 }
 $d = fn($t) => catalog::show_date($t ? (int)$t : null);
 $programs = catalog::programs(false);
@@ -248,7 +253,7 @@ if ($own) {
     echo \local_studentrecords\local\shell::inline_menu();
     if (\core_component::get_component_directory('local_academictranscript') !== null) {
         echo html_writer::div(html_writer::link(
-            new moodle_url('/local/academictranscript/index.php'),
+            new moodle_url('/local/academictranscript/index.php', ['view' => 'mine']),
             get_string('rec_transcriptlink', $p),
             ['class' => 'btn btn-outline-secondary']
         ), 'sr-actions justify-content-end');

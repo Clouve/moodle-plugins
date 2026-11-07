@@ -22,12 +22,16 @@ class catalog {
         'ferpanotice' => ['textarea', 'approvals'],
         'calendartype' => ['calendar', 'calendar'], 'yearstart' => ['text', 'calendar'], 'creditunit' => ['text', 'calendar'],
         'withdrawpct' => ['percent', 'calendar'], 'minattendance' => ['percent', 'calendar'],
-        'ldamoodle' => ['yesno', 'calendar'], 'refundlda' => ['yesno', 'calendar'], 'fulltimehours' => ['hours', 'calendar'],
+        'atriskgrade' => ['percent0', 'calendar'], 'ldamoodle' => ['yesno', 'calendar'], 'refundlda' => ['yesno', 'calendar'],
+        'fulltimehours' => ['hours', 'calendar'],
         'selfreg' => ['yesno', 'calendar'],
         'idauto' => ['yesno', 'admissions'], 'idprefix' => ['text', 'admissions'], 'idyear' => ['yesno', 'admissions'],
         'idpadding' => ['number', 'admissions'], 'idseparator' => ['text', 'admissions'],
         'transferingpa' => ['yesno', 'admissions'], 'honors' => ['textarea', 'admissions'],
     ];
+
+    /** @var float Course grade percent a student is at risk under, until the school sets its own. */
+    const ATRISKGRADE = 70.0;
 
     /** @var string[] Delivery modes of a program. */
     const DELIVERY = ['online', 'inperson', 'hybrid'];
@@ -121,6 +125,16 @@ class catalog {
     public static function withdraw_percent(): float {
         $v = self::setting('withdrawpct');
         return is_numeric($v) && $v > 0 && $v <= 100 ? (float)$v : dates::WITHDRAW_PERCENT;
+    }
+
+    /**
+     * Course grade a student is at risk under, on the teacher's list: the school's rule, else 70%. With 0 no grade is.
+     *
+     * @return float
+     */
+    public static function atrisk_percent(): float {
+        $v = self::setting('atriskgrade');
+        return is_numeric($v) && $v >= 0 && $v <= 100 ? (float)$v : self::ATRISKGRADE;
     }
 
     /**

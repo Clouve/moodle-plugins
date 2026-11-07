@@ -44,7 +44,10 @@ if ($do !== '') {
             redirect($url, get_string('queue_cancelled', $at), null, \core\output\notification::NOTIFY_SUCCESS);
         }
     } catch (moodle_exception $e) {
-        redirect($url, s($e->getMessage()), null, \core\output\notification::NOTIFY_ERROR);
+        // A second click on Issue or Reissue isn't a failure: the first one made the copy.
+        $level = in_array($e->errorcode, ['req_err_issued', 'req_err_justissued'], true) ?
+            \core\output\notification::NOTIFY_INFO : \core\output\notification::NOTIFY_ERROR;
+        redirect($url, s($e->getMessage()), null, $level);
     }
 }
 
@@ -68,6 +71,12 @@ $button = function (string $do, int $rid, string $label, string $class) use ($ur
         html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'request', 'value' => $rid]) .
         html_writer::tag('button', $label, ['type' => 'submit', 'class' => $class]), ['method' => 'post',
         'action' => $url->out_omit_querystring(), 'class' => 'd-inline']);
+};
+// Nobody issues their own transcript, so their own row shows why in place of the button.
+$issue = function (string $do, \stdClass $r, string $label, string $class) use ($button, $at) {
+    global $USER;
+    return (int)$r->userid === (int)$USER->id ? html_writer::span(get_string('issueown', $at), 'text-muted small') :
+        $button($do, (int)$r->id, $label, $class);
 };
 $cancel = function (\stdClass $r) use ($url, $at) {
     $id = 'queuecancel' . $r->id;
@@ -121,7 +130,7 @@ foreach (array_merge($groups['pending'], $groups['waiting']) as $r) {
     $action = requests::state($r) === 'waiting' ? html_writer::span(
         get_string('queue_waits_' . $r->timing, $at),
         'sr-tag sr-tag-neutral'
-    ) : $button('issue', (int)$r->id, get_string('queue_issue', $at), 'btn btn-primary btn-sm');
+    ) : $issue('issue', $r, get_string('queue_issue', $at), 'btn btn-primary btn-sm');
     $t->data[] = [$student($r), s($what($r)), $to, $date((int)$r->timecreated),
         html_writer::div($action . $cancel($r), 'at-actions')];
 }
@@ -162,9 +171,9 @@ foreach (array_slice(array_reverse($groups['issued']), 0, 20) as $r) {
             new moodle_url('/local/academictranscript/issued.php', ['id' => $issue->id]),
             get_string('download'),
             ['class' => 'me-2']
-        ) : '') . $button(
+        ) : '') . $issue(
             'reissue',
-            (int)$r->id,
+            $r,
             get_string('queue_reissue', $at),
             'btn btn-outline-secondary btn-sm'
         )];

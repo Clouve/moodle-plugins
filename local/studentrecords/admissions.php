@@ -168,7 +168,10 @@ if ($report === 'applicants') {
             new moodle_url('/local/studentrecords/student.php', ['id' => $c->id, 'tab' => 'admissions']),
             get_string('adm_openfile', $p)
         );
-        if ($manage && in_array($c->status, ['inquiry', 'applicant', 'waitlisted'], true)) {
+        $mine = \local_studentrecords\local\access::is_own($c);
+        if ($manage && $mine) {
+            $panel .= html_writer::tag('p', get_string('err_ownrecord', $p), ['class' => 'sr-muted small mt-3 mb-0']);
+        } else if ($manage && in_array($c->status, ['inquiry', 'applicant', 'waitlisted'], true)) {
             $form = html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
             $form .= html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'a', 'value' => $c->id]);
             $form .= html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'show', 'value' => $show]);
@@ -196,7 +199,7 @@ if ($report === 'applicants') {
     }
     echo html_writer::tag('h2', get_string('adm_morereports', $p), ['class' => 'sr-h2']) . $shell::quick_links($tabs);
     echo $OUTPUT->footer();
-    die();
+    return;
 }
 $where = '1 = 1';
 $sqlparams = [];
@@ -300,7 +303,7 @@ if ($report === 'pipeline') {
 if ($download !== '') {
     audit::log('export', 'admissions', null, null, $report . ' ' . $download . ' ' . count($rows));
     reports::download('admissions_' . $report . '_' . date('Ymd'), $download, $head, $rows);
-    die();
+    return;
 }
 
 echo staffarea::header();

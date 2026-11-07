@@ -209,6 +209,9 @@ $sourcesections = function (array $types) use ($docform, $csvform, $p, $OUTPUT) 
 if ($step === 'school' || $step === 'look') {
     $form->display();
 } else if ($step === 'grading') {
+    if (\local_academictranscript\local\srsource::enabled()) {
+        echo $OUTPUT->notification(get_string('scale_usesstudentrecords', $p), 'info');
+    }
     echo $draftlinks(['grade', 'mark']);
     echo \local_academictranscript\local\html_view::scale_table();
     echo html_writer::div(
@@ -223,6 +226,9 @@ if ($step === 'school' || $step === 'look') {
     );
     $sourcesections($steptypes[$step]);
 } else if ($step === 'marks') {
+    if (\local_academictranscript\local\srsource::enabled()) {
+        echo $OUTPUT->notification(get_string('scale_usesstudentrecords', $p), 'info');
+    }
     echo $draftlinks(['mark']);
     $table = new html_table();
     $table->head = [get_string('markcode', $p), get_string('marklabel', $p), get_string('col_description', $p),

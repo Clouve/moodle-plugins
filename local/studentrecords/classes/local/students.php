@@ -13,6 +13,9 @@ class students {
     /** @var string Table. */
     const TABLE = 'local_studentrecords_student';
 
+    /** @var string[] Fields that decide a degree. Nobody changes them on their own record. */
+    const DECIDING = ['programid', 'status', 'awardname', 'awarddate'];
+
     /** @var string[] Directory information, hidden from teachers when the student opts out (FERPA). */
     const DIRECTORY = ['preferredname', 'dob', 'email', 'phone', 'usaddress', 'homeaddress', 'homecountry'];
 
@@ -43,20 +46,54 @@ class students {
     }
 
     /**
-     * Create or update a student record (change history and audit log are written).
+     * Create or update a student record (change history and audit log are written). New students get their automatic IDs one
+     * at a time, until the record is saved, or two could work out the same number. So don't call this from inside a
+     * transaction: the lock must outlast the commit.
      *
      * @param array|\stdClass $data
      * @return int record id
      */
     public static function save($data): int {
-        global $DB;
         $data = (array)$data;
+        if (empty($data['id']) && trim((string)($data['studentid'] ?? '')) === '' && admissions::auto_id()) {
+            return registration::with_lock('studentno', fn() => self::write($data));
+        }
+        return self::write($data);
+    }
+
+    /**
+     * Stop a person changing what decides their own degree, or making their own record, which could start with all of it.
+     * The rest of their own record is theirs to keep up to date.
+     *
+     * @param array $data
+     * @param \stdClass|null $current the record as it is, null for a new one
+     */
+    protected static function check_own_record(array $data, ?\stdClass $current): void {
+        if (!access::is_own($current ?? (object)['userid' => $data['userid']])) {
+            return;
+        }
+        $changed = array_filter(self::DECIDING, fn($f) => array_key_exists($f, $data) && $current &&
+            (string)$data[$f] !== (string)$current->$f);
+        if (!$current || $changed) {
+            throw new \moodle_exception('err_ownrecord', 'local_studentrecords');
+        }
+    }
+
+    /**
+     * Write a student record, with its histories and the audit log.
+     *
+     * @param array $data
+     * @return int record id
+     */
+    protected static function write(array $data): int {
+        global $DB;
         $isnew = empty($data['id']);
         $current = null;
         if (!$isnew) {
             $current = self::get($data['id']);
             $data['userid'] = $current->userid;
         }
+        self::check_own_record($data, $current);
         $note = trim((string)($data['statusnote'] ?? ''));
         unset($data['statusnote']);
         $transaction = $DB->start_delegated_transaction();

@@ -12,7 +12,8 @@
 require_once(__DIR__ . '/../../config.php');
 require_once($CFG->libdir . '/gradelib.php');
 
-use local_academictranscript\local\scale;
+use local_academictranscript\local\posting;
+use local_academictranscript\local\srpost;
 
 $courseid = required_param('courseid', PARAM_INT);
 $course = get_course($courseid);
@@ -52,7 +53,7 @@ if (data_submitted() && confirm_sesskey()) {
     $changed = 0;
     foreach ($students as $uid => $u) {
         $code = strtoupper($codes[$uid] ?? '');
-        $code = isset(scale::teacher_marks()[$code]) ? $code : '';
+        $code = isset(posting::marks_for(srpost::target($course->id, $uid))[$code]) ? $code : '';
         $note = core_text::substr(trim($notes[$uid] ?? ''), 0, 255);
         $reason = core_text::substr(trim($reasons[$uid] ?? ''), 0, 255);
         $old = $existing[$uid] ?? null;
@@ -112,10 +113,13 @@ if (!$students) {
 }
 
 $item = grade_item::fetch_course_item($course->id);
-$options = ['' => get_string('code_none', 'local_academictranscript')];
-foreach (scale::teacher_marks() as $c => $label) {
-    $options[$c] = s($c) . ' - ' . $label;
-}
+$menu = function (array $marks): array {
+    $options = ['' => get_string('code_none', 'local_academictranscript')];
+    foreach ($marks as $c => $label) {
+        $options[$c] = s($c) . ' - ' . $label;
+    }
+    return $options;
+};
 
 $table = new html_table();
 $table->head = [get_string('studentname', 'local_academictranscript'), get_string('coursetotal', 'local_academictranscript'),
@@ -124,6 +128,7 @@ $table->head = [get_string('studentname', 'local_academictranscript'), get_strin
     get_string('postedcol', 'local_academictranscript')];
 foreach ($students as $uid => $u) {
     $old = $existing[$uid] ?? null;
+    $target = srpost::target($course->id, $uid);
     $total = '';
     if ($item) {
         $grade = grade_grade::fetch(['itemid' => $item->id, 'userid' => $uid]);
@@ -135,7 +140,7 @@ foreach ($students as $uid => $u) {
                 0,
                 100
             );
-            $total = format_float($pct, 2) . '% (' . (scale::letter($pct) ?? '-') . ')';
+            $total = format_float($pct, 2) . '% (' . (posting::letter($pct, $target) ?? '-') . ')';
         }
     }
     $changedby = '';
@@ -147,7 +152,7 @@ foreach ($students as $uid => $u) {
         html_writer::link(new moodle_url('/local/academictranscript/index.php', ['userid' => $uid]), fullname($u)),
         $total,
         html_writer::select(
-            $options,
+            $menu(posting::marks_for($target)),
             "code[$uid]",
             $old ? (string)$old->code : '',
             false,
@@ -160,7 +165,7 @@ foreach ($students as $uid => $u) {
             'maxlength' => 255, 'size' => 30, 'class' => 'form-control',
             'aria-label' => get_string('reason', 'local_academictranscript')]),
         $changedby,
-        ($pv = \local_academictranscript\local\posting::preview($course->id, $uid)['posted']) ?
+        ($pv = posting::preview($course->id, $uid)['posted']) ?
             s($pv->grade) . ' (' . userdate($pv->timeposted, get_string('strftimedate', 'langconfig')) . ')' : '-',
     ];
 }

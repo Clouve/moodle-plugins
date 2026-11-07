@@ -3,7 +3,7 @@
 namespace local_studentrecords\task;
 
 /**
- * Daily: seat offers from section waitlists that were not taken in time lapse and go to the next student.
+ * Daily: seat offers from section waitlists that were not taken in time lapse, and free seats go to the students waiting.
  *
  * @package    local_studentrecords
  * @copyright  2026 Clouve Inc.

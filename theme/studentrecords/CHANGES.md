@@ -11,7 +11,9 @@ The theme now works on Moodle 4.5, 5.1, 5.2 and 5.3. It was written for Moodle 5
 - The user menu opens on Moodle 4.5. The theme keeps no copy of it, and the user's name goes in as user menu metadata.
 - The buttons that open the drawers have the right icons on Moodle 4.5 and 5.1, and on Moodle 4.5 their labels stay hidden and the phone menu has its icon.
 - Moodle 5.3: the course index has its collapse button back, the top bar stays white, and the colour mode menu shows. The theme's colours follow the dark colour mode.
-- Sign-in instructions show on wide screens on Moodle 5.2 and later.
+- On Moodle 5.3 the top bar has no divider after the search box, as in Boost.
+- The login card has its background and border, which a rule in Boost had always hidden. In dark mode it uses the dark colours, and on phones it still has no frame.
+- Sign-in instructions show on wide screens on Moodle 5.3.
 - A phone is the same width on every version. On Moodle 4.5 the phone styles reached up to 767 pixels.
 - On phones a wide logo or a long school name no longer pushes the user menu off the screen.
 - The Student Records menu heading keeps its padding on Moodle 4.5 and 5.1.

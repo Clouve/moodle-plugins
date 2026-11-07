@@ -112,6 +112,37 @@ if ($report === 'students') {
             echo $OUTPUT->footer();
             return;
         }
+        if ($action === 'reverse') {
+            // The Financial Aid role can't open the student account, so its reversals are made here, and only of aid lines.
+            require_capability('local/studentrecords:manageaid', $syscontext);
+            $line = $DB->get_record(billing::TXN, ['id' => $item, 'studentid' => $studentid], '*', MUST_EXIST);
+            if (!billing::is_aid_line($line)) {
+                throw new moodle_exception('err_notaidline', $p);
+            }
+            $back = new moodle_url($here, ['awardyear' => $awardyear]);
+            $form = new \local_studentrecords\form\reverse(
+                new moodle_url($back, ['action' => $action, 'item' => $item]),
+                ['text' => s($line->description) . ' ' . $money(-(float)$line->amount), 'info' => get_string('reverseaidinfo', $p)]
+            );
+            $form->set_data(['id' => $studentid, 'action' => $action, 'item' => $item]);
+            if ($form->is_cancelled()) {
+                redirect($back);
+            }
+            if ($data = $form->get_data()) {
+                try {
+                    billing::reverse($item, (string)$data->reason);
+                    redirect($back, get_string('saved', $p), null, \core\output\notification::NOTIFY_SUCCESS);
+                } catch (moodle_exception $e) {
+                    redirect($back, $e->getMessage(), null, \core\output\notification::NOTIFY_ERROR);
+                }
+            }
+            echo staffarea::header();
+            echo $OUTPUT->heading(s(\local_studentrecords\local\students::display_name($student)) . ': ' .
+                get_string('reverse', $p));
+            $form->display();
+            echo $OUTPUT->footer();
+            return;
+        }
         $shell = \local_studentrecords\local\shell::class;
         $year = aidhelp::year($studentid, $awardyear);
         if ($action === 'aidyear' && $manageaid && optional_param('saveyear', 0, PARAM_BOOL)) {
@@ -136,14 +167,8 @@ if ($report === 'students') {
         }
         if ($action === 'letter' && $manageaid) {
             require_sesskey();
-            \local_studentrecords\local\messages::student('aidletter', $student, ['term' => $awardyear]);
-            audit::log('update', 'aid', $studentid, (int)$student->userid, 'award letter ' . $awardyear);
-            redirect(
-                new moodle_url($here, ['awardyear' => $awardyear]),
-                get_string('aid_lettersent', $p),
-                null,
-                \core\output\notification::NOTIFY_SUCCESS
-            );
+            [$text, $type] = aidhelp::send_letter($student, $awardyear);
+            redirect(new moodle_url($here, ['awardyear' => $awardyear]), $text, null, $type);
         }
         audit::log('view', 'aid', $studentid, (int)$student->userid);
         $PAGE->set_heading(get_string('aid_awardstitle', $p, (object)['name' => \local_studentrecords\local\students::display_name(
@@ -265,6 +290,23 @@ if ($report === 'students') {
             ), '', '', ''];
         }
         echo $table->data ? html_writer::table($table) : $shell::empty_state(get_string('noaid', $p));
+        $lines = aid::lines($studentid, $awardyear);
+        if ($lines) {
+            $ltable = new html_table();
+            $ltable->attributes['class'] = 'sr-table';
+            $ltable->head = [get_string('date'), get_string('description'), get_string('amountusd', $p), ''];
+            $ltable->colclasses = [2 => 'text-end'];
+            foreach ($lines as $l) {
+                $state = $l->reversedby ? $shell::tag(get_string('reversed', $p)) : '';
+                if ($manageaid && !$l->reversedby && !$l->reverses) {
+                    $state = html_writer::link(new moodle_url($here, ['awardyear' => $awardyear, 'action' => 'reverse',
+                        'item' => $l->id]), get_string('reverse', $p));
+                }
+                $ltable->data[] = [catalog::show_date((int)$l->txndate), s($l->description), $money(-(float)$l->amount), $state];
+            }
+            echo html_writer::tag('h2', get_string('aidreport_disbursements', $p), ['class' => 'sr-h2 mt-3']);
+            echo html_writer::table($ltable);
+        }
         // Aid year details form.
         $f = html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]) .
             html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action', 'value' => 'aidyear']) .
